@@ -1,67 +1,80 @@
-# Template de démonstration
+# BleBox pour Gladys Assistant
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Cette intégration affiche vos modules Wi-Fi BleBox dans Gladys et les commande
+par leur API HTTP locale, sur votre réseau, sans le cloud BleBox.
 
-## Ce que vous obtenez
+**Jamais testé avec un vrai appareil** : l'intégration suit la documentation
+de l'API et la bibliothèque blebox-uniapi du fabricant, mais personne ne l'a
+encore essayée sur un module réel. Vos retours sont les bienvenus.
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Intégration non officielle, sans lien avec BleBox.
 
-## Configuration
+## Modules pris en charge
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+| Module                | Dans Gladys                                                               |
+| --------------------- | ------------------------------------------------------------------------- |
+| wLightBox, wLightBoxS | lumière : marche/arrêt, luminosité, couleur (selon le mode de couleur)    |
+| dimmerBox             | lumière : marche/arrêt, luminosité                                        |
+| switchBox, switchBoxD | relais (lecture seule tant qu'ils ne sont pas déclarés sûrs), puissance   |
+| shutterBox            | volet ou rideau : ouvrir, fermer, arrêter, position (si calibré)          |
+| gateBox               | portail : ouvert/fermé, position, boutons ouvrir, fermer, arrêter         |
+| thermoBox             | température, sonde, consigne, chauffage marche/arrêt, coupure de sécurité |
+| tempSensor            | température                                                               |
+| airSensor             | PM2,5 et PM10                                                             |
+| multiSensor           | température, humidité, luminosité, vent, pluie, inondation, CO2…          |
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+## Installation
 
-## Actions
+1. Donnez à chaque module une adresse IP fixe dans votre box.
+2. Dans Gladys, installez l'intégration BleBox depuis le store.
+3. Saisissez les adresses IP des modules (séparées par des virgules), ou
+   utilisez « Chercher les appareils BleBox » (recherche mDNS par Gladys).
+4. Ajoutez les appareils depuis l'onglet Découverte.
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+Si l'API locale de vos modules est protégée dans l'application wBox,
+saisissez l'identifiant et le mot de passe. Le mot de passe est gardé par
+Gladys dans sa base, jamais réaffiché, envoyé seulement à vos modules (en
+clair sur votre réseau local : les modules n'ont pas de https).
 
-## Scènes
+## Sécurité des commandes
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+- **Relais** : un relais peut alimenter n'importe quoi, et un « éteins tout »
+  d'un assistant vocal ou d'une scène atteint chaque interrupteur. Un relais
+  est donc affiché en lecture seule tant que vous ne le déclarez pas sûr dans
+  « Relais déclarés sûrs » (l'identifiant du module, paramètre `DEVICE_ID`
+  de l'onglet Découverte, ou `identifiant:numéro` pour un seul relais).
+- **Portail** : jamais un interrupteur, seulement des boutons. Fermer et
+  arrêter sont toujours permis et annulent une ouverture qui n'est pas encore
+  partie. L'ouverture (et la sortie portillon) est refusée tant que
+  « Autoriser l'ouverture du portail » n'est pas activé. En mode pas à pas,
+  l'impulsion n'est envoyée que si le portail est vu complètement fermé pour
+  ouvrir, ou complètement ouvert pour fermer : ailleurs, utilisez « Arrêter
+  le portail ».
+- **Chauffage (thermoBox)** : l'extinction est toujours permise. L'allumage
+  et la consigne sont refusés tant que « Autoriser les commandes de
+  chauffage » n'est pas activé, et la consigne ne dépasse jamais le plafond
+  (25 °C par défaut, 30 °C au plus) ni la plage du thermoBox. Gladys
+  n'allume le thermoBox que dans le mode (chauffage ou refroidissement) réglé
+  dans ses propres réglages.
+- Chaque commande sensible relit l'état du module juste avant d'agir et
+  vérifie que c'est bien le même module à cette adresse ; l'autorisation est
+  revérifiée juste avant l'envoi. Une commande qui ne peut pas partir en
+  3,5 secondes est refusée sans être envoyée ; une commande partie sans
+  réponse est annoncée « envoyée, sans confirmation ».
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Pannes
 
-## Tableau de bord
+- Identifiants refusés : le module n'est plus interrogé, puis à nouveau après
+  15 min, 1 h, 6 h et toutes les 24 h ; enregistrer d'autres identifiants ou
+  « Chercher les appareils BleBox » réessaie aussitôt.
+- Un module qui demande d'attendre (HTTP 429 ou 5xx) est mis en pause d'une
+  minute à six heures, même après un redémarrage.
+- Un module qui ne répond pas est relu après 30 s, 1, 2 puis 5 min, jamais
+  plus vite que l'intervalle de rafraîchissement.
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+## Limites
 
-## Dépannage
-
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+- Pas d'index d'énergie (compteurs kWh) dans cette version, ni la PM1 de
+  l'airSensor, ni l'inclinaison des lamelles, ni la température de blanc ou
+  les effets des wLightBox.
+- Pas de saunaBox, tvLiftBox ni gateController.

@@ -1,177 +1,191 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "BleBox",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "BleBox Wi-Fi modules, locally: lights, relays, shutters, gate, heating, sensors.",
+    "fr": "Modules Wi-Fi BleBox, en local : lumières, relais, volets, portail, chauffage, capteurs."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-blebox:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-blebox/main/cover.png",
+  "categories": ["lighting", "climate", "security"],
+  "transports": ["local"],
+  "network_discovery": [{ "type": "mdns", "service": "_bbxsrv._tcp" }],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your BleBox modules, on your local network",
+        "fr": "Vos modules BleBox, sur votre réseau local"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "wLightBox, wLightBoxS and dimmerBox (lights), switchBox and switchBoxD (relays), shutterBox (shutters), gateBox (gate), thermoBox (heating), tempSensor, airSensor and multiSensor, through the local HTTP API of the modules, without the BleBox cloud. Give each module a fixed IP address in your router, type the addresses below or use \"Find the BleBox devices\", then add them from the Discovery tab. Never tested with a real device. Unofficial integration, not affiliated with BleBox.",
+        "fr": "wLightBox, wLightBoxS et dimmerBox (lumières), switchBox et switchBoxD (relais), shutterBox (volets), gateBox (portail), thermoBox (chauffage), tempSensor, airSensor et multiSensor, par l'API HTTP locale des modules, sans le cloud BleBox. Donnez à chaque module une adresse IP fixe dans votre box, saisissez les adresses ci-dessous ou utilisez « Chercher les appareils BleBox », puis ajoutez-les depuis l'onglet Découverte. Jamais testé avec un vrai appareil. Intégration non officielle, sans lien avec BleBox."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-blebox/blob/main/docs/fr.md",
+          "label": { "en": "Guide (French)", "fr": "Guide (français)" }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-blebox/blob/main/docs/en.md",
+          "label": { "en": "Guide (English)", "fr": "Guide (anglais)" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
+      "key": "addresses",
+      "type": "string",
+      "label": { "en": "IP addresses of the modules", "fr": "Adresses IP des modules" },
       "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+        "en": "Separated by commas, for example 192.168.1.40, 192.168.1.41 (add :port if it is not 80). Modules found by the search are kept without being typed here.",
+        "fr": "Séparées par des virgules, par exemple 192.168.1.40, 192.168.1.41 (ajoutez :port s'il n'est pas 80). Les modules trouvés par la recherche sont gardés sans être saisis ici."
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
-    },
-    {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
-      },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
-    },
-    {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "placeholder": { "en": "192.168.1.40, 192.168.1.41", "fr": "192.168.1.40, 192.168.1.41" },
       "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
+      "default": ""
     },
     {
-      "key": "poll_frequency",
+      "key": "username",
+      "type": "string",
+      "label": { "en": "User name (optional)", "fr": "Identifiant (facultatif)" },
+      "description": {
+        "en": "Only if the local API of your modules is protected by a password in the wBox app. The same for every module.",
+        "fr": "Seulement si l'API locale de vos modules est protégée par un mot de passe dans l'application wBox. Le même pour tous les modules."
+      },
+      "required": false
+    },
+    {
+      "key": "password",
+      "type": "secret",
+      "label": { "en": "Password (optional)", "fr": "Mot de passe (facultatif)" },
+      "description": {
+        "en": "Kept by Gladys in its database, never shown again, sent only to your BleBox modules (in clear on your local network: they have no https).",
+        "fr": "Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à vos modules BleBox (en clair sur votre réseau local : ils n'ont pas de https)."
+      },
+      "required": false
+    },
+    {
+      "key": "poll_interval",
       "type": "number",
       "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "How often each module is read, in seconds.",
+        "fr": "Fréquence de lecture de chaque module, en secondes."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": 10,
+      "min": 5,
+      "max": 300
+    },
+    {
+      "key": "relays_section",
+      "type": "section",
+      "label": { "en": "Relays (switchBox)", "fr": "Relais (switchBox)" },
+      "description": {
+        "en": "A relay may feed anything (a pump, a heater, a gate motor), and a \"turn everything off\" of a voice assistant or a scene reaches every switch. So a relay is only shown in Gladys, read only, until you declare it safe below: it then becomes a switch you can control.",
+        "fr": "Un relais peut alimenter n'importe quoi (une pompe, un radiateur, un moteur de portail), et un « éteins tout » d'un assistant vocal ou d'une scène atteint chaque interrupteur. Un relais est donc seulement affiché dans Gladys, en lecture seule, jusqu'à ce que vous le déclariez sûr ci-dessous : il devient alors un interrupteur commandable."
+      }
+    },
+    {
+      "key": "safe_relays",
+      "type": "string",
+      "label": { "en": "Relays declared safe", "fr": "Relais déclarés sûrs" },
+      "description": {
+        "en": "The device ids (shown in the Discovery tab, parameter DEVICE_ID), separated by commas: every relay of the module, or id:number for one relay (0 for the first one). Only for loads that may be switched at any time (a lamp, a fan).",
+        "fr": "Les identifiants des modules (affichés dans l'onglet Découverte, paramètre DEVICE_ID), séparés par des virgules : tous les relais du module, ou identifiant:numéro pour un seul relais (0 pour le premier). Seulement pour des charges qu'on peut couper ou allumer à tout moment (une lampe, un ventilateur)."
+      },
+      "placeholder": { "en": "1afe34e750b8, 1afe34e750c9:1", "fr": "1afe34e750b8, 1afe34e750c9:1" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "gate_section",
+      "type": "section",
+      "label": { "en": "Gate (gateBox)", "fr": "Portail (gateBox)" },
+      "description": {
+        "en": "The gate is shown with buttons (open, close, stop), never as a switch. Closing and stopping are always allowed. Opening (and the walk-in output) is refused until you allow it below. In step-by-step mode, a pulse is only sent when the gate is seen fully closed (to open) or fully open (to close).",
+        "fr": "Le portail est affiché avec des boutons (ouvrir, fermer, arrêter), jamais comme un interrupteur. Fermer et arrêter sont toujours permis. L'ouverture (et la sortie portillon) est refusée tant que vous ne l'autorisez pas ci-dessous. En mode pas à pas, une impulsion n'est envoyée que si le portail est vu complètement fermé (pour ouvrir) ou complètement ouvert (pour fermer)."
+      }
+    },
+    {
+      "key": "allow_gate_open",
+      "type": "boolean",
+      "label": { "en": "Allow opening the gate", "fr": "Autoriser l'ouverture du portail" },
+      "description": {
+        "en": "Off by default. On: the dashboard, the scenes and the voice assistants can open the gate.",
+        "fr": "Désactivé par défaut. Activé : le tableau de bord, les scènes et les assistants vocaux peuvent ouvrir le portail."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "heating_section",
+      "type": "section",
+      "label": { "en": "Heating (thermoBox)", "fr": "Chauffage (thermoBox)" },
+      "description": {
+        "en": "By default Gladys only reads the thermoBox, and can switch it off. Once allowed, it can also switch it on and change its setpoint, never above the ceiling below nor outside the range of the thermoBox.",
+        "fr": "Par défaut Gladys ne fait que lire le thermoBox, et peut l'éteindre. Une fois autorisé, il peut aussi l'allumer et changer sa consigne, jamais au-dessus du plafond ci-dessous ni hors de la plage du thermoBox."
+      }
+    },
+    {
+      "key": "allow_heating",
+      "type": "boolean",
+      "label": {
+        "en": "Allow the heating commands",
+        "fr": "Autoriser les commandes de chauffage"
+      },
+      "description": {
+        "en": "Off by default. Off: switching on and setpoints are refused (switching off stays allowed).",
+        "fr": "Désactivé par défaut. Désactivé : l'allumage et les consignes sont refusés (l'extinction reste permise)."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "heating_max_temperature",
+      "type": "number",
+      "label": { "en": "Setpoint ceiling (°C)", "fr": "Plafond de consigne (°C)" },
+      "description": {
+        "en": "Gladys never sets a thermoBox above this temperature. 25 °C by default, from 10 to 30 °C (never more than 30 °C, whatever is typed).",
+        "fr": "Gladys ne règle jamais un thermoBox au-dessus de cette température. 25 °C par défaut, de 10 à 30 °C (jamais plus de 30 °C, quoi qu'on saisisse)."
+      },
+      "required": false,
+      "default": 25,
+      "min": 10,
+      "max": 30
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the names of the features added from now on, and for the command errors.",
+        "fr": "Sert aux noms des fonctionnalités ajoutées désormais, et aux erreurs des commandes."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
+        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
-      "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
+      "key": "find_devices",
+      "label": { "en": "Find the BleBox devices", "fr": "Chercher les appareils BleBox" },
       "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+        "en": "Searches the modules on the local network (mDNS, through Gladys) and asks the typed addresses again, even after refused credentials.",
+        "fr": "Cherche les modules sur le réseau local (mDNS, par Gladys) et interroge à nouveau les adresses saisies, même après des identifiants refusés."
       },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "timeout_seconds": 60
     }
   ]
 }

@@ -12,44 +12,31 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- A working example of scene triggers, scene actions and dashboard widgets
-  (Gladys 5.1.0 or later).
-- `CHANGELOG.md`, rolled by the Release workflow.
-- A GitHub Release for every version, with its changelog section as notes: the
-  Gladys Supervision page links each version to the repository's releases.
-- CI runs the tests on Node 22 and 24, and builds the Docker image.
-- Dependabot keeps the npm dependencies and the GitHub Actions up to date.
-- `SECURITY.md` (how to report a vulnerability) and `CLAUDE.md` (project rules
-  for contributors and coding assistants).
-- Manifest tests: `version` matches `package.json`, `docker_image` is tagged
-  with it, descriptions hold 10 to 100 characters, placeholders are
-  multi-language objects.
-- The latitude and longitude fields show an example value as placeholder.
+- BleBox modules over their local HTTP API, without the cloud: added by IP
+  address, or found on the network by mDNS (through Gladys), and kept by
+  device id when their address changes. Optional HTTP basic authentication.
+- wLightBox, wLightBoxS and dimmerBox: on/off, brightness and colour, one
+  light per channel in mono mode, two in CTx2 mode.
+- switchBox and switchBoxD: relay states and power; a relay is a switch only
+  once declared safe in the configuration, read only otherwise.
+- shutterBox: open, close, stop, and the position once calibrated (shutters
+  and curtains).
+- gateBox: open or closed, position, and open, close, stop and second output
+  buttons, never a switch. Opening is off by default; in step-by-step mode a
+  pulse is only sent when its effect is certain from the state read just
+  now; closing and stopping are never blocked and cancel a pending opening.
+- thermoBox: room and probe temperatures, setpoint, heating on/off,
+  operating state, safety cut-off. Switching on and the setpoint are off by
+  default, the setpoint is bounded by a ceiling (25 °C by default, 30 °C at
+  most) and the range of the device; switching off is never blocked.
+- tempSensor, airSensor (PM2.5, PM10) and multiSensor (temperature,
+  humidity, light level, wind, rain, flood, CO2, power, voltage, current).
+- Commands decided on a state read just now, sent within 3.5 s or refused
+  unsent, "sent, without confirmation" when no answer came back.
+- Credentials refused: a stop persisted in `/data`, tried again after 15 min,
+  1 h, 6 h then every 24 h; HTTP 429 or 5xx: a pause of 1 min to 6 h; other
+  failures: spaced reads, never faster than the refresh interval.
+- Reachability on the transport badge, states within the Gladys rate limit,
+  measurements spaced by a minute.
 
-### Changed
-
-- Node.js 22 or later is required (Node 20 is end-of-life).
-- Integration SDK 0.15.0. The tests now run against the fake Gladys of the
-  SDK, which refuses the payloads Gladys refuses.
-- The refresh interval is one minute minimum, the fastest Gladys polls a
-  device. The plug's power is only sent when it changes, and every 30
-  minutes otherwise.
-
-### Fixed
-
-- Gladys refused the devices of the Discovery tab: the weather station and
-  the plug declared their poll frequency in seconds instead of one of the
-  values Gladys accepts, and were never polled. They now poll every minute,
-  and the readings follow the refresh interval of the configuration.
-
-- The release commit no longer fails `npm run format:check`: the Release
-  workflow updates the manifest `version` and `docker_image` in place instead
-  of re-printing the whole file with `jq`.
-- The integration can write to `/data`: the image creates the directory owned
-  by the `node` user, a new Docker volume was owned by root.
-- A sub-container running the integration's own image follows it to the new
-  tag at each release, as well as in the manifest of the build summary: it kept
-  the previous tag, which may not exist on the registry. Sub-containers on a
-  third-party image (a broker, a database...) keep theirs.
-
-[Unreleased]: https://github.com/GladysAssistant/integration-template-js/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-blebox/commits/main

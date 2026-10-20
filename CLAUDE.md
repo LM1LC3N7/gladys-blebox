@@ -5,19 +5,22 @@ contributors.
 
 ## What this is
 
-A Gladys Assistant **external integration**: a Node.js service (Node 22+, ESM,
-no build step) that runs in its own sandboxed Docker container and talks to
-Gladys through
+A Gladys Assistant **external integration** for BleBox Wi-Fi modules (local
+HTTP API, no cloud): a Node.js service (Node 22+, ESM, no build step) that runs
+in its own sandboxed Docker container and talks to Gladys through
 [`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
-its only runtime dependency. It started from the official JavaScript template.
+its only runtime dependency. It started from the official JavaScript template
+and ports blebox-uniapi (Apache-2.0). See `TODO.md` for the status and the
+decisions.
 
 ## Commands
 
 ```bash
 npm install
 npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+node --test test/app.test.js              # one file
+node --test --test-name-pattern "gate"    # tests whose name matches
+npm run cover                             # regenerate cover.png (800×534)
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
@@ -31,46 +34,51 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+index.js                          SDK wiring only: src/handlers.js registered before connect()
+src/handlers.js                   the SDK handlers -> BleBoxApp (shared with the tests)
+src/app.js                        BleBoxApp: known devices, polling, blocks, commands, search
+src/blebox/http.js                one HTTP request: deadline, size cap, sent flag, beforeSend
+src/blebox/client.js              GET / POST JSON, basic auth, statuses -> error kinds
+src/blebox/types.js               product type + API level -> paths (pure)
+src/blebox/parse.js               answers -> layouts and readings (pure)
+src/blebox/light.js               colour modes, channels, masked commands (pure)
+src/model.js                      known devices -> Gladys devices and values (pure)
+src/publisher.js                  states within the rate limit (250/min), measures spaced
+src/store.js                      /data/blebox.json (known devices, blocks), never a password
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+src/constants.js, src/i18n.js     frozen keys, limits, timings; texts in English and French
+scripts/cover.mjs                 cover.png generator (plain Node)
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, against the SDK's fake Gladys and fake devices
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
 
 ## Rules
 
-- **External ids are forever.** Build them with
-  `gladys.externalIds(type, platformId)`, `platformId` being the unique id the
-  platform gives the device (serial, cloud id, MAC), never a label. Gladys keys
-  devices, their history, scenes and dashboards on them: changing one creates a
-  new device and orphans the old one. The same goes for every key users store:
-  manifest `config_schema`, `actions`, widget and scene keys, feature keys.
-- **The container rootfs is read-only.** Write only under `/data`, the one
-  writable volume. Never log tokens, passwords or API keys.
+- **External ids are forever.** `gladys.externalIds('blebox', id)`, `id`
+  being the device id BleBox gives, never a label nor an address. Feature
+  keys, manifest keys and action keys are frozen too. A created device never
+  loses a feature (see `publishDevices`).
+- **Safety.** A gate or a heating output is never a `switch` nor a
+  commandable `binary`. A relay is a switch only when declared safe. Gate
+  opening and heating commands stay off by default, checked on arrival,
+  after the fresh read and in `beforeSend`; closing, stopping and switching
+  off are never blocked and cancel what waits. A command is decided on a
+  state read just now, never on memory. Keep the tests that say so.
+- **The container rootfs is read-only.** Write only under `/data`. Never log
+  or store a password; a `secret` field is kept by Gladys in its database,
+  never shown again: never write that it is encrypted.
 - **Versions belong to the Release workflow** (Actions → Release). Never edit
-  `version` in `package.json` or in the manifest, nor the `docker_image` tag,
-  by hand — except on the README's hand-pushed tag path, which bumps all three
-  together before tagging. `test/manifest.test.js` checks they agree.
+  `version` in `package.json`, `package-lock.json` or the manifest, nor the
+  `docker_image` tag, by hand. `test/manifest.test.js` checks they agree.
 - **Changelog.** Every user-visible change adds a line under `## [Unreleased]`
-  in `CHANGELOG.md` (`### Added`, `Changed`, `Fixed`, `Removed`, `Security`).
-  Never write a version heading: the Release workflow moves the section, and it
-  becomes the notes of the GitHub Release.
-- **Manifest.** Texts are multi-language objects `{ "en": ..., "fr": ... }`:
-  `label`, `description` and `placeholder` alike, never a plain string. The
-  catalog `description` holds 10 to 100 characters per language. A field the
-  older cores do not know needs a higher `gladys_version` minimum
-  (`categories`: 4.86.0; `widgets`, `scene_triggers`, `scene_actions`,
-  `type: "provider"`: 5.1.0). `test/manifest.test.js` ties the manifest to the
-  code (defaults, action, scene and widget handlers): change both sides
-  together.
-- **User-facing text** is bilingual (English and French): action messages,
-  manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
+  in `CHANGELOG.md`. Never write a version heading.
+- **Manifest.** Texts are `{ "en": ..., "fr": ... }` objects. The catalog
+  `description` holds 10 to 100 characters per language.
+- **Units.** Only the ones the core lists for the category
+  (`DEVICE_FEATURE_UNITS_BY_CATEGORY` in `server/utils/constants.js`).
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
-  in English. Tests never touch the network.
+  in English. Tests never touch the network (loopback only).
+- **Encoding.** Every file is UTF-8 without BOM; `test/encoding.test.js`
+  refuses mojibake.
