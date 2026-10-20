@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-20
+
 ### Added
 
 - BleBox modules over their local HTTP API, without the cloud: added by IP
@@ -60,4 +62,5 @@ the notes of the version's GitHub Release.
 - Reachability on the transport badge, states within the Gladys rate limit,
   measurements spaced by a minute.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-blebox/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-blebox/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-blebox/releases/tag/v0.1.1
