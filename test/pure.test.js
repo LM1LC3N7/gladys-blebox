@@ -12,6 +12,7 @@ import { layoutOf, mergeLayout, readingOf } from '../src/blebox/parse.js';
 import { configOf, parseIdentity } from '../src/blebox/types.js';
 import { featuresOf, valuesOf } from '../src/model.js';
 import { sanitize } from '../src/store.js';
+import { isLanUnicast } from '../src/app.js';
 
 test('config: addresses, safe relays, options strictly true, the heating ceiling', () => {
   assert.equal(parseAddress('http://192.168.1.40/api/device/state'), '192.168.1.40');
@@ -98,6 +99,7 @@ test('gate: legacy and extended answers, unknown position (-1) left out', () => 
     mode: undefined,
     extra: 1,
     moving: true,
+    pulseMs: undefined,
   });
   const extended = { gate: { currentPos: -1, openCloseMode: 2, extraButtonType: 2 } };
   const layout = layoutOf('gate', extended);
@@ -107,7 +109,7 @@ test('gate: legacy and extended answers, unknown position (-1) left out', () => 
   assert.equal(layoutOf('gate', walkIn).secondOutput, true);
   const record = { id: 'aa0000000001', kind: 'gate', layout: layoutOf('gate', walkIn) };
   const keys = featuresOf(record).map((f) => f.key);
-  assert.deepEqual(keys, ['gate', 'position', 'open', 'close', 'stop', 'second-output']);
+  assert.deepEqual(keys, ['gate', 'position', 'open', 'close', 'second-output'], 'no stop output');
   assert.ok(featuresOf(record).every((f) => f.spec.category !== 'switch'));
 });
 
@@ -212,21 +214,60 @@ test('lights: channels by colour mode, masked commands', () => {
   assert.deepEqual(commandHex(dimmer, [0], undefined, 'light', 1).bytes, [255]);
 });
 
+const gate = (id) => ({
+  id,
+  type: 'gateBox',
+  kind: 'gate',
+  apiLevel: 20230102,
+  address: '192.168.1.41',
+  layout: {},
+});
+
+test('M6: only LAN unicast addresses are taken from an announcement', () => {
+  for (const ip of ['192.168.1.41', '10.0.0.7', '172.16.3.4']) {
+    assert.equal(isLanUnicast(ip), true, ip);
+  }
+  for (const ip of [
+    '127.0.0.1',
+    '0.0.0.0',
+    '169.254.1.2',
+    '224.0.0.251',
+    '192.168.1.255',
+    '192.168.1.0',
+    '256.1.1.1',
+    'fe80::1',
+    null,
+  ]) {
+    assert.equal(isLanUnicast(ip), false, String(ip));
+  }
+});
+
 test('/data: unknown keys dropped, a block never longer than its bound', () => {
   const now = 1_000_000;
   const data = sanitize(
     {
-      devices: { aa0000000001: { id: 'aa0000000001' }, 'not-an-id': { id: 'not-an-id' } },
-      blocks: {
-        '192.168.1.40': { kind: 'pause', until: now + 365 * 86_400_000, failures: 3 },
-        '192.168.1.41': { kind: 'auth', until: 'soon' },
-        '192.168.1.42': { kind: 'other', until: now + 1 },
+      devices: {
+        aa0000000001: gate('aa0000000001'),
+        'not-an-id': gate('not-an-id'),
+        // The type, the level and the kind disagree, or an odd address.
+        bb0000000002: { ...gate('bb0000000002'), kind: 'thermo' },
+        cc0000000003: { ...gate('cc0000000003'), address: '__proto__' },
+        dd0000000004: { id: 'dd0000000004' },
       },
+      blocks: JSON.parse(
+        JSON.stringify({
+          '192.168.1.40': { kind: 'pause', until: now + 365 * 86_400_000, failures: 3 },
+          '192.168.1.41': { kind: 'auth', until: 'soon' },
+          '192.168.1.42': { kind: 'other', until: now + 1 },
+        }).replace('{', `{"__proto__": {"kind": "auth", "until": ${now + 1000}, "failures": 1},`),
+      ),
       extra: 'dropped',
     },
     now,
   );
   assert.deepEqual(Object.keys(data.devices), ['aa0000000001']);
+  assert.equal(Object.getPrototypeOf(data.blocks), Object.prototype, 'M3: never the prototype');
+  assert.deepEqual(Object.keys(data.blocks), ['192.168.1.40', '192.168.1.41']);
   assert.equal(data.blocks['192.168.1.40'].until, now + TIMINGS.pauseMax);
   assert.equal(data.blocks['192.168.1.41'].until, now);
   assert.equal(data.blocks['192.168.1.42'], undefined);

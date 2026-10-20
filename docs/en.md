@@ -33,8 +33,10 @@ Unofficial integration, not affiliated with BleBox.
 
 If the local API of your modules is protected in the wBox app, type the user
 name and the password. The password is kept by Gladys in its database, never
-shown again, sent only to your modules (in clear on your local network: the
-modules have no https).
+shown again, sent only to your modules: the typed addresses and the modules
+already added (in clear on your local network: the modules have no https). A
+protected module only found by the search gets no credentials: the status
+asks you to type its address.
 
 ## Command safety
 
@@ -42,32 +44,48 @@ modules have no https).
   voice assistant or a scene reaches every switch. So a relay is shown read
   only until you declare it safe in "Relays declared safe" (the module id,
   parameter `DEVICE_ID` of the Discovery tab, or `id:number` for one relay).
-- **Gate**: never a switch, only buttons. Closing and stopping are always
-  allowed and cancel an opening that has not left yet. Opening (and the
-  walk-in output) is refused until "Allow opening the gate" is on. In
-  step-by-step mode, the pulse is only sent when the gate is seen fully
-  closed to open it, or fully open to close it: otherwise, use "Stop the
-  gate".
-- **Heating (thermoBox)**: switching off is always allowed. Switching on and
-  the setpoint are refused until "Allow the heating commands" is on, and the
+  A relay removed from the list is refused at once, even if its command was
+  waiting.
+- **Gate**: never a switch, only buttons, and only the ones the wiring of the
+  gateBox allows. Opening (and the walk-in output) is refused until "Allow
+  opening the gate" is on.
+  - Recent gateBox (API 20210118 or later): opening and closing use its
+    `/s/o` and `/s/c` commands, the module decides on its limit switches
+    (and refuses when it cannot tell). Closing is always allowed.
+  - Opening and closing on separate outputs: closing is always allowed.
+  - Step-by-step mode on an older gateBox: closing and opening are **the
+    same pulse** (open, stop, close, stop). So closing also needs "Allow
+    opening the gate", and the pulse is only sent when the gate is seen
+    fully open to close it, or fully closed to open it.
+  - Stopping (second output set as "stop") is always allowed.
+  - One pulse at a time: after a pulse, the next one is refused until the
+    gate is seen elsewhere than where it was (or a few seconds later); use
+    "Stop the gate". Recent gateBox modules do not tell whether the gate
+    moves, only whether it is at a limit switch.
+  - Closing and stopping cancel an opening that has not left yet.
+- **Heating (thermoBox)**: switching off is always sent, without a state
+  read (it only depends on the identity of the module). Switching on and the
+  setpoint are refused until "Allow the heating commands" is on, and the
   setpoint never exceeds the ceiling (25 °C by default, 30 °C at most) nor
   the range of the thermoBox. Gladys only switches the thermoBox on in the
   mode (heating or cooling) set in its own settings.
-- Each sensitive command reads the state of the module just before acting
-  and checks that the same module still answers at this address; the
-  permission is checked again right before sending. A command that cannot
-  leave within 3.5 seconds is refused unsent; a command sent without an
-  answer is reported "sent, without confirmation".
+- Before every command, Gladys checks that the same module still answers at
+  this address. Each sensitive command reads the state of the module just
+  before acting; the permission is checked again right before sending. A
+  command that cannot leave within 3.5 seconds is refused unsent; a command
+  sent without an answer is reported "sent, without confirmation".
 
 ## Failures
 
-- Credentials refused: the module is no longer asked, then again after
-  15 min, 1 h, 6 h and every 24 h; saving other credentials or "Find the
-  BleBox devices" tries again at once.
+- Credentials refused: the module is no longer asked nor commanded, then
+  again after 15 min, 1 h, 6 h and every 24 h; saving other credentials or
+  "Find the BleBox devices" tries again at once.
 - A module asking to wait (HTTP 429 or 5xx) is paused for one minute to six
-  hours, even across a restart.
+  hours, even across a restart: no reads, no opening, no switching on.
+  Closing, stopping and switching off stay possible (one try).
 - A module that does not answer is read again after 30 s, 1, 2 then 5 min,
-  never faster than the refresh interval.
+  never faster than the refresh interval; if its address changed, an mDNS
+  search finds it again (every 5 minutes at most).
 
 ## Limits
 

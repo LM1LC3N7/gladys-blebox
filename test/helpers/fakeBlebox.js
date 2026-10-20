@@ -13,6 +13,7 @@ export const IDS = {
   shutter: 'cc0000000003',
   light: 'dd0000000004',
   air: 'ee0000000005',
+  oldGate: 'aa0000000006',
 };
 
 const info = (id, type, apiLevel, deviceName) => ({
@@ -31,6 +32,7 @@ export function devices() {
     gateType: 0,
     extraButtonType: 1,
   };
+  const oldGate = { currentPos: 100, gateType: 0, extraButtonType: 1, gatePulseTimeMs: 1500 };
   const thermo = {
     state: 0,
     operatingState: 3,
@@ -69,8 +71,19 @@ export function devices() {
       routes: {
         'GET /api/device/state': info(IDS.gate, 'gateBox', '20230102', 'Gate'),
         'GET /state/extended': () => ({ gate }),
-        'GET /s/p': () => ({ gate }),
+        'GET /s/o': () => ({ gate }),
+        'GET /s/c': () => ({ gate }),
         'GET /s/s': () => ({ gate }),
+      },
+    },
+    // An older gateBox (no /s/o, /s/c, no openCloseMode): step-by-step pulses.
+    '192.168.1.46': {
+      gate: oldGate,
+      routes: {
+        'GET /api/device/state': info(IDS.oldGate, 'gateBox', '20200831', 'Old gate'),
+        'GET /state/extended': () => ({ gate: oldGate }),
+        'GET /s/p': () => ({ gate: oldGate }),
+        'GET /s/s': () => ({ gate: oldGate }),
       },
     },
     '192.168.1.42': {

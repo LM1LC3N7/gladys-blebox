@@ -30,6 +30,8 @@ import {
 } from '@gladysassistant/integration-sdk';
 import {
   EXTERNAL_ID_TYPE,
+  GATE_EXTRA,
+  GATE_MODE,
   OPENING_SENSOR_STATE,
   THERMO_LIMITS,
   THERMOSTAT_MODE,
@@ -146,8 +148,13 @@ export function featuresOf(record, { safeRelays = new Set() } = {}) {
       add('gate', binarySensor(C.OPENING_SENSOR), FEATURE_NAMES.gate);
       add('position', sensor(C.UNKNOWN, T.SENSOR.INTEGER, 0, 100), FEATURE_NAMES.gatePosition);
       add('open', button(), FEATURE_NAMES.open);
-      add('close', button(), FEATURE_NAMES.close);
-      add('stop', button(), FEATURE_NAMES.stop);
+      // Only the buttons the wiring of the gateBox can do (a created one is kept).
+      if (layout.mode !== GATE_MODE.ONLY_OPEN) {
+        add('close', button(), FEATURE_NAMES.close);
+      }
+      if (layout.extra === GATE_EXTRA.STOP && layout.mode !== GATE_MODE.OPEN_CLOSE) {
+        add('stop', button(), FEATURE_NAMES.stop);
+      }
       if (layout.secondOutput) {
         add('second-output', button(), FEATURE_NAMES.secondOutput);
       }
@@ -304,9 +311,11 @@ export function valuesOf(record, reading, options) {
   };
   switch (record.kind) {
     case 'switch':
+      // Both keys, whatever the declaration: a `relay-<n>` switch kept after
+      // the relay left the safe list still shows the real state.
       for (const [index, state] of Object.entries(reading.relays ?? {})) {
-        set(`relay-${index}`, state);
-        set(`relay-${index}-state`, state);
+        values.set(`relay-${index}`, state);
+        values.set(`relay-${index}-state`, state);
       }
       set('power', reading.power);
       set('voltage', reading.voltage);

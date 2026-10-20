@@ -92,6 +92,10 @@ export function layoutOf(kind, data) {
       const extra = int(own(gate, 'extraButtonType'), 0, 3);
       return {
         legacy: !isObject(own(data, 'gate')),
+        // No openCloseMode before API 20230102: the outputs are then wired as
+        // step-by-step (or only-open), never as open/close.
+        mode,
+        extra,
         // The second output as its own button (walk-in, other), as blebox-uniapi.
         secondOutput:
           isObject(own(data, 'gate')) &&
@@ -239,7 +243,9 @@ export function readingOf(kind, data, layout) {
         position,
         mode: layout?.legacy ? undefined : int(own(gate, 'openCloseMode'), 0, 2),
         extra: int(own(gate, 'extraButtonType'), 0, 3),
+        // Only the legacy API gives desiredPos; the recent ones never tell a move.
         moving: desired !== undefined && position !== undefined ? desired !== position : undefined,
+        pulseMs: int(own(gate, 'gatePulseTimeMs'), 0, 60_000),
       };
     }
     case 'thermo': {

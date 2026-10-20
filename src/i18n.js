@@ -105,6 +105,11 @@ export const T = {
       `Not a supported BleBox device (or API version): ${list.join(', ')}.`,
       `Pas un appareil BleBox pris en charge (ou version d'API) : ${list.join(', ')}.`,
     ),
+  typeToAuthenticate: (list) =>
+    both(
+      `Found by the search but protected by a password: ${list.join(', ')}. The credentials are only sent to typed addresses: type it in the configuration.`,
+      `Trouvé par la recherche mais protégé par un mot de passe : ${list.join(', ')}. Les identifiants ne partent que vers les adresses saisies : saisissez-la dans la configuration.`,
+    ),
   sameAddress: (address, previous, next) =>
     both(
       `Two devices at ${address}: ${previous} was known there, ${next} answers now. Give each device a fixed address in your router.`,
@@ -134,6 +139,10 @@ export const ERRORS = {
   unknownDevice: both(
     'This device is not known, or no longer at its address: nothing sent.',
     "Appareil inconnu, ou plus à son adresse : rien n'a été envoyé.",
+  ),
+  gatePulseDisabled: both(
+    'In step-by-step mode, closing sends the same pulse as opening: it needs "Allow opening the gate" in the configuration. Nothing sent.',
+    "En mode pas à pas, fermer envoie la même impulsion qu'ouvrir : il faut « Autoriser l'ouverture du portail » dans la configuration. Rien n'a été envoyé.",
   ),
   unsafeRelay: both(
     'This relay is not declared safe in the configuration: nothing sent.',
@@ -193,6 +202,22 @@ export const ERRORS = {
   gateNotOpen: both(
     'The gate is not shown fully open: in step-by-step mode a pulse could open it, so nothing was sent. Use "Stop the gate".',
     "Le portail n'est pas vu complètement ouvert : en mode pas à pas une impulsion pourrait l'ouvrir, rien n'a donc été envoyé. Utilisez « Arrêter le portail ».",
+  ),
+  gateNotOpenNoStop: both(
+    'The gate is not shown fully open: in step-by-step mode a pulse could open it, so nothing was sent. Use the remote control of the gate.',
+    "Le portail n'est pas vu complètement ouvert : en mode pas à pas une impulsion pourrait l'ouvrir, rien n'a donc été envoyé. Utilisez la télécommande du portail.",
+  ),
+  gateJustCommanded: both(
+    'The gate was commanded just now and has not been seen moving yet: nothing sent. Use "Stop the gate", or try again in a few seconds.',
+    "Le portail vient d'être commandé et n'a pas encore été vu bouger : rien n'a été envoyé. Utilisez « Arrêter le portail », ou réessayez dans quelques secondes.",
+  ),
+  gateUnsure: both(
+    'The gateBox refused: the gate is neither fully open nor fully closed (HTTP 409).',
+    "Le gateBox a refusé : le portail n'est ni complètement ouvert ni complètement fermé (HTTP 409).",
+  ),
+  gateModeChanged: both(
+    'The settings of this gateBox changed since it was added: nothing sent. Use "Find the BleBox devices".',
+    "Les réglages de ce gateBox ont changé depuis son ajout : rien n'a été envoyé. Utilisez « Chercher les appareils BleBox ».",
   ),
   gateClosesAlone: both(
     'This gateBox only opens (the gate closes by itself): nothing sent.',

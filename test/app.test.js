@@ -176,6 +176,9 @@ test('a relay no longer declared safe keeps its feature but refuses the commands
   assert.equal(net.commands().length, 0);
 });
 
+const OLD = '192.168.1.46';
+const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
+
 test('gate: opening is refused by default, nothing sent', async (t) => {
   const { gladys, net } = await setup(t);
   const ack = await press(gladys, IDS.gate, 'open');
@@ -184,54 +187,98 @@ test('gate: opening is refused by default, nothing sent', async (t) => {
   assert.equal(net.commands().length, 0);
 });
 
-test('gate: allowed, step-by-step, opened only from a closed gate read just now', async (t) => {
+test('gate API >= 20210118: /s/o behind the option, /s/c always, the module decides (409)', async (t) => {
   const { gladys, net } = await setup(t, { config: { allow_gate_open: true } });
   const before = net.calls.length;
   const ack = await press(gladys, IDS.gate, 'open');
   assert.equal(ack.success, true, ack.error);
-  const paths = net.calls.slice(before).map((c) => c.path);
   assert.deepEqual(
-    paths,
-    ['/api/device/state', '/state/extended', '/s/p'],
-    'identity, state, pulse',
+    net.calls.slice(before).map((c) => c.path),
+    ['/api/device/state', '/state/extended', '/s/o'],
+    'identity, state, then the device-side opening',
   );
-  // Half open: a pulse could stop or close it.
   net.table['192.168.1.41'].gate.currentPos = 50;
-  const refused = await press(gladys, IDS.gate, 'open');
-  assert.equal(refused.success, false);
-  assert.match(refused.error, /pas vu fermé/);
-  assert.equal(net.commands().length, 1);
+  await gladys.fake.configUpdated({ addresses: ALL, allow_gate_open: false });
+  // Closing never needs the option: /s/c never opens.
+  assert.equal((await press(gladys, IDS.gate, 'close')).success, true);
+  assert.equal(net.commands().at(-1).path, '/s/c');
+  net.fail('192.168.1.41', '/s/c', { status: 409 });
+  net.table['192.168.1.41'].gate.currentPos = 100;
+  const unsure = await press(gladys, IDS.gate, 'close');
+  assert.equal(unsure.success, false);
+  assert.match(unsure.error, /ni complètement ouvert ni complètement fermé/);
+  assert.equal((await press(gladys, IDS.gate, 'stop')).success, true);
+  assert.equal(net.commands().at(-1).path, '/s/s');
+  assert.ok(!net.commands().some((c) => c.path === '/s/p'), 'never the toggle');
 });
 
-test('gate: closing and stopping are never blocked by the option', async (t) => {
-  const { gladys, net } = await setup(t);
-  net.table['192.168.1.41'].gate.currentPos = 100;
-  assert.equal((await press(gladys, IDS.gate, 'close')).success, true);
-  assert.equal((await press(gladys, IDS.gate, 'stop')).success, true);
+test('B1: step-by-step, closing is the opening pulse: refused without the option', async (t) => {
+  const { gladys, net } = await setup(t, { config: { addresses: OLD } });
+  const ack = await press(gladys, IDS.oldGate, 'close');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /même impulsion qu'ouvrir/);
+  assert.equal(net.commands().length, 0);
+  // Stop stays allowed (the second output is a stop, read just now).
+  assert.equal((await press(gladys, IDS.oldGate, 'stop')).success, true);
   assert.deepEqual(
     net.commands().map((c) => c.path),
-    ['/s/p', '/s/s'],
+    ['/s/s'],
   );
-  // Half open, step-by-step: a pulse could open it, refused; the stop stays.
-  net.table['192.168.1.41'].gate.currentPos = 40;
-  const refused = await press(gladys, IDS.gate, 'close');
-  assert.equal(refused.success, false);
-  assert.match(refused.error, /Arrêter le portail/);
-  // Open/close mode: the second output closes, whatever the position.
-  net.table['192.168.1.41'].gate.openCloseMode = 2;
-  assert.equal((await press(gladys, IDS.gate, 'close')).success, true);
-  assert.deepEqual(net.commands().at(-1).path, '/s/s');
-  // ...and has no stop.
-  assert.equal((await press(gladys, IDS.gate, 'stop')).success, false);
+});
+
+test('step-by-step, allowed: a pulse only from a gate seen fully open (close) or closed (open)', async (t) => {
+  const { gladys, net } = await setup(t, { config: { addresses: OLD, allow_gate_open: true } });
+  assert.equal((await press(gladys, IDS.oldGate, 'close')).success, true);
+  assert.deepEqual(
+    net.commands().map((c) => c.path),
+    ['/s/p'],
+  );
+  net.table[OLD].gate.currentPos = 50;
+  const ajar = await press(gladys, IDS.oldGate, 'close');
+  assert.equal(ajar.success, false);
+  assert.match(ajar.error, /Arrêter le portail/);
+  const notClosed = await press(gladys, IDS.oldGate, 'open');
+  assert.match(notClosed.error, /pas vu fermé/);
+  net.table[OLD].gate.currentPos = 0;
+  assert.equal((await press(gladys, IDS.oldGate, 'open')).success, true);
+  assert.equal(net.commands().length, 2);
+});
+
+test('I1: one gate pulse at a time, and none until the gate is seen moving', async (t) => {
+  const { gladys, net } = await setup(t, { config: { addresses: OLD, allow_gate_open: true } });
+  // Two closes at once from 100 %: one pulse, the other refused.
+  const acks = await Promise.all([
+    press(gladys, IDS.oldGate, 'close'),
+    press(gladys, IDS.oldGate, 'close'),
+  ]);
+  assert.deepEqual(acks.map((a) => a.success).sort(), [false, true]);
+  assert.equal(net.commands().length, 1);
+  // The limit switch still reads 100: a second pulse would stop it.
+  const again = await press(gladys, IDS.oldGate, 'close');
+  assert.equal(again.success, false);
+  assert.match(again.error, /vient d'être commandé/);
+  // Seen moving (50): the guard is lifted, the stop is always there.
+  net.table[OLD].gate.currentPos = 50;
+  assert.match((await press(gladys, IDS.oldGate, 'close')).error, /pas vu complètement ouvert/);
+  assert.equal((await press(gladys, IDS.oldGate, 'stop')).success, true);
+  assert.equal(net.commands().length, 2);
+});
+
+test('I1c: two openings in a row from a closed gate: one pulse only', async (t) => {
+  const { gladys, net } = await setup(t, { config: { addresses: OLD, allow_gate_open: true } });
+  net.table[OLD].gate.currentPos = 0;
+  assert.equal((await press(gladys, IDS.oldGate, 'open')).success, true);
+  const second = await press(gladys, IDS.oldGate, 'open');
+  assert.equal(second.success, false, 'a second pulse would stop it ajar');
+  assert.equal(net.commands().length, 1);
 });
 
 test('gate: a close cancels an opening still waiting to leave', async (t) => {
   const { gladys, net } = await setup(t, { config: { allow_gate_open: true } });
-  net.table['192.168.1.41'].gate.openCloseMode = 2;
   net.table['192.168.1.41'].gate.currentPos = 50;
   const release = net.hold('192.168.1.41', '/state/extended');
   const opening = press(gladys, IDS.gate, 'open');
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await tick();
   const closing = await press(gladys, IDS.gate, 'close');
   assert.equal(closing.success, true, closing.error);
   release();
@@ -240,16 +287,16 @@ test('gate: a close cancels an opening still waiting to leave', async (t) => {
   assert.match(opened.error, /Annulée/);
   assert.deepEqual(
     net.commands().map((c) => c.path),
-    ['/s/s'],
-    'never /s/p',
+    ['/s/c'],
+    'never /s/o',
   );
 });
 
 test('gate: the option switched off during the read refuses the opening (beforeSend)', async (t) => {
   const { gladys, app, net } = await setup(t, { config: { allow_gate_open: true } });
-  const release = net.hold('192.168.1.41', '/s/p');
+  const release = net.hold('192.168.1.41', '/s/o');
   const opening = press(gladys, IDS.gate, 'open');
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await tick();
   app.config = normalizeConfig({ addresses: ALL, allow_gate_open: false });
   release();
   const ack = await opening;
@@ -273,13 +320,38 @@ test('gate: another device at the address is never commanded', async (t) => {
 test('gate: a request that may have left is "sent, without confirmation"', async (t) => {
   const { gladys, net } = await setup(t);
   net.table['192.168.1.41'].gate.currentPos = 100;
-  net.fail('192.168.1.41', '/s/p', new BleBoxError('timeout', { sent: true }));
+  net.fail('192.168.1.41', '/s/c', new BleBoxError('timeout', { sent: true }));
   const ack = await press(gladys, IDS.gate, 'close');
   assert.equal(ack.success, false);
   assert.match(ack.error, /envoyée, sans confirmation \(timeout\)/);
-  net.fail('192.168.1.41', '/s/p', new BleBoxError('unreachable'), { before: true });
+  // Guarded since: the gate has not been seen moving.
+  assert.match((await press(gladys, IDS.gate, 'close')).error, /vient d'être commandé/);
+});
+
+test('gate: a request that could not connect is "not sent"', async (t) => {
+  const { gladys, net } = await setup(t);
+  net.table['192.168.1.41'].gate.currentPos = 100;
+  net.fail('192.168.1.41', '/s/c', new BleBoxError('unreachable'), { before: true });
   const unsent = await press(gladys, IDS.gate, 'close');
   assert.match(unsent.error, /Commande non envoyée/);
+});
+
+test('M1: only the buttons the wiring can do; the walk-in output without openCloseMode', async (t) => {
+  const net = fakeNetwork();
+  net.table[OLD].gate.extraButtonType = 2;
+  net.table['192.168.1.41'].gate.openCloseMode = 2;
+  const { gladys } = await setup(t, {
+    net,
+    config: { addresses: `192.168.1.41, ${OLD}`, allow_gate_open: true },
+  });
+  const keys = (deviceId) =>
+    deviceOf(gladys, deviceId)
+      .features.filter((f) => !f.read_only)
+      .map((f) => f.external_id.split(':').at(-1));
+  assert.deepEqual(keys(IDS.gate), ['open', 'close'], 'open/close mode: no stop');
+  assert.deepEqual(keys(IDS.oldGate), ['open', 'close', 'second-output']);
+  assert.equal((await press(gladys, IDS.oldGate, 'second-output')).success, true);
+  assert.equal(net.commands().at(-1).path, '/s/s');
 });
 
 test('thermoBox: setpoint and switching on need the option, switching off never', async (t) => {
@@ -372,20 +444,102 @@ test('credentials refused: a stop persisted in /data, no read until the next try
   assert.ok(!everything.includes('secret'), 'no password anywhere');
 });
 
-test('HTTP 429: a pause persisted and bounded, applied to the commands too', async (t) => {
+test('I2: a 429/5xx pause holds the reads and the openings, never close, stop or off', async (t) => {
   const store = new MemoryStore();
-  const { gladys, app, net } = await setup(t, { store });
+  const { gladys, app, net } = await setup(t, { store, config: { allow_gate_open: true } });
   net.fail('192.168.1.41', '/state/extended', { status: 429, headers: { 'retry-after': '120' } });
+  net.fail('192.168.1.42', '/state/extended', { status: 503 });
   app.failures.clear();
   await app.poll();
   const block = app.data.blocks['192.168.1.41'];
   assert.equal(block.kind, 'pause');
   assert.ok(block.until - Date.now() > 100_000 && block.until - Date.now() <= 120_000);
-  net.table['192.168.1.41'].gate.currentPos = 100;
-  const ack = await press(gladys, IDS.gate, 'close');
-  assert.equal(ack.success, false);
-  assert.match(ack.error, /demandé d'attendre/);
+  assert.equal(app.data.blocks['192.168.1.42'].kind, 'pause');
+  net.table['192.168.1.41'].gate.currentPos = 50;
+  const open = await press(gladys, IDS.gate, 'open');
+  assert.equal(open.success, false);
+  assert.match(open.error, /demandé d'attendre/);
+  assert.equal((await press(gladys, IDS.gate, 'close')).success, true);
+  assert.equal((await press(gladys, IDS.thermo, 'mode', 0)).success, true);
+  assert.deepEqual(
+    net.commands().map((c) => c.path),
+    ['/s/c', '/s/0'],
+  );
+  // Refused credentials hold everything.
+  app.data.blocks['192.168.1.42'] = { kind: 'auth', failures: 1, until: Date.now() + 60_000 };
+  assert.equal((await press(gladys, IDS.thermo, 'mode', 0)).success, false);
+});
+
+test('I3: switching off is always sent, without a state read nor "already off"', async (t) => {
+  const { gladys, net } = await setup(t);
+  // Read as off (a switching on may still be on its way), and a state read that fails.
+  net.fail('192.168.1.42', '/state/extended', new BleBoxError('timeout', { sent: true }));
+  assert.equal((await press(gladys, IDS.thermo, 'mode', 0)).success, true);
+  assert.deepEqual(
+    net.commands().map((c) => c.path),
+    ['/s/0'],
+  );
+});
+
+test('I4: the identity is checked before every command (DHCP swap)', async (t) => {
+  const { gladys, net } = await setup(t, { config: { safe_relays: IDS.switch } });
+  net.table['192.168.1.40'].routes['GET /api/device/state'] = {
+    device: { deviceName: 'Heater', type: 'thermoBox', apiLevel: '20200229', id: 'bb00000000ff' },
+  };
+  net.table['192.168.1.43'].routes['GET /api/device/state'] = {
+    device: { deviceName: 'Gate', type: 'gateBox', apiLevel: '20230102', id: 'aa00000000ff' },
+  };
+  const relay = await press(gladys, IDS.switch, 'relay-0', 1);
+  assert.equal(relay.success, false);
+  const stop = await press(gladys, IDS.shutter, 'state', 0);
+  assert.equal(stop.success, false);
   assert.equal(net.commands().length, 0);
+});
+
+test('I5: a relay removed from the safe list while its command waits is never sent', async (t) => {
+  const { gladys, app, net } = await setup(t, { config: { safe_relays: IDS.switch } });
+  const release = net.hold('192.168.1.40', '/api/device/state');
+  const pending = press(gladys, IDS.switch, 'relay-0', 1);
+  await tick();
+  app.config = normalizeConfig({ addresses: ALL, safe_relays: '' });
+  release();
+  const ack = await pending;
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /pas déclaré sûr/);
+  assert.equal(net.commands().length, 0);
+});
+
+test('M2: a relay switch kept after leaving the safe list still shows the real state', async (t) => {
+  const { gladys, app, net } = await setup(t, { config: { safe_relays: IDS.switch } });
+  await createAll(gladys);
+  await gladys.fake.configUpdated({ addresses: ALL, safe_relays: '' });
+  net.table['192.168.1.40'].routes['GET /state/extended']().relays[0].state = 1;
+  app.failures.clear();
+  await app.poll();
+  await app.publisher.flush();
+  assert.equal(gladys.fake.lastState(id(IDS.switch, 'relay-0')), 1);
+});
+
+test('M4: a command before the first start is a refusal, never a TypeError', async () => {
+  const gladys = createFakeGladys({ selector: SELECTOR });
+  const app = new BleBoxApp({
+    gladys,
+    client: new BleBoxClient({ request: fakeNetwork().request }),
+    store: new MemoryStore(),
+    timers,
+  });
+  await assert.rejects(app.setValue({}, { external_id: id(IDS.gate, 'close') }, 1), (err) =>
+    /Appareil inconnu/.test(err.message),
+  );
+});
+
+test('M5: a poll and a read after a command share one request', async (t) => {
+  const { app, net } = await setup(t);
+  const record = app.data.devices[IDS.thermo];
+  app.failures.clear();
+  const before = net.calls.filter((c) => c.address === '192.168.1.42').length;
+  await Promise.all([app.read(record), app.read(record)]);
+  assert.equal(net.calls.filter((c) => c.address === '192.168.1.42').length, before + 1);
 });
 
 test('every reconnection publishes the status and the Discovery tab again', async (t) => {
@@ -411,5 +565,39 @@ test('the search: mDNS through Gladys, the devices in the Discovery tab', async 
   const ack = await gladys.fake.action('find_devices');
   assert.equal(ack.success, true);
   assert.match(ack.data.message.fr, /gateBox "Gate" aa0000000001 \(192\.168\.1\.41\)/);
+  assert.equal(gladys.fake.discoveredDevices.length, 1);
+});
+
+test('M6: odd announced addresses ignored, no credentials to an announced address, one scan per 10 s', async (t) => {
+  const net = fakeNetwork(undefined, { auth: { username: 'admin', password: 'pw-secret' } });
+  const { gladys, net: used } = await setup(t, {
+    net,
+    config: { addresses: '', username: 'admin', password: 'pw-secret' },
+    scanResults: {
+      mdns: ['127.0.0.1', '169.254.1.2', '192.168.1.255', '0.0.0.0', '192.168.1.41'].map((ip) => ({
+        name: ip,
+        host: 'x.local',
+        addresses: [ip],
+        port: 80,
+        txt: [],
+      })),
+    },
+  });
+  await gladys.fake.action('find_devices');
+  await gladys.fake.action('find_devices');
+  assert.equal(gladys.fake.scans.length, 1, 'the second search reuses the first results');
+  assert.deepEqual([...new Set(used.calls.map((c) => c.address))], ['192.168.1.41']);
+  assert.ok(used.calls.every((c) => c.headers.authorization === undefined));
+  assert.equal(gladys.fake.discoveredDevices.length, 0);
+  assert.match(
+    gladys.fake.connectionStatus.message.fr,
+    /protégé par un mot de passe : 192\.168\.1\.41/,
+  );
+  // Typed: the credentials go, the device is added.
+  await gladys.fake.configUpdated({
+    addresses: '192.168.1.41',
+    username: 'admin',
+    password: 'pw-secret',
+  });
   assert.equal(gladys.fake.discoveredDevices.length, 1);
 });

@@ -38,16 +38,16 @@ import {
   BUTTON_PUSH,
   COVER_STATE,
   EXTERNAL_ID_TYPE,
+  GATE_DIRECT_API_LEVEL,
   GATE_EXTRA,
   GATE_MODE,
   LIMITS,
   THERMO_LIMITS,
-  THERMO_STATE,
   THERMOSTAT_MODE,
   TIMINGS,
 } from './constants.js';
 import { ERRORS, T, join, word } from './i18n.js';
-import { buildDevice, featuresOf, valuesOf } from './model.js';
+import { buildDevice, featuresOf, isSafeRelay, valuesOf } from './model.js';
 import { StatePublisher } from './publisher.js';
 import { FileStore, emptyData } from './store.js';
 import { BleBoxClient } from './blebox/client.js';
@@ -72,6 +72,22 @@ async function mapLimit(items, limit, task) {
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
+}
+
+/**
+ * An IPv4 address a module may have on a LAN: not loopback, "this network",
+ * link-local, multicast or reserved, and not a .0 / .255 (network, broadcast).
+ */
+export function isLanUnicast(ip) {
+  const match = typeof ip === 'string' && /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (!match) {
+    return false;
+  }
+  const [a, b, , d] = match.slice(1).map(Number);
+  if ([a, b, d].some((n) => n > 255) || Number(match[3]) > 255) {
+    return false;
+  }
+  return !(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254) || d === 0 || d === 255);
 }
 
 /** A command value, strictly: a finite number or its exact text ('' and null are not 0). */
@@ -122,7 +138,17 @@ export class BleBoxApp {
     this.queues = new Map();
     /** id -> tickets of the opening / heating commands not sent yet */
     this.tickets = new Map();
-    this.followUps = new Set();
+    /** id -> handles of the reads after its last command */
+    this.followUps = new Map();
+    /** id -> the read of a device in progress (a poll and a follow-up share it) */
+    this.reads = new Map();
+    /** id -> the gate pulse command between its plan and its answer */
+    this.gateFlight = new Map();
+    /** id -> { from, until }: after a gate pulse, until the gate is seen elsewhere */
+    this.gateGuards = new Map();
+    /** The last mDNS results: Gladys refuses two scans within 10 s. */
+    this.lastScan = undefined;
+    this.lastLostSearch = -Infinity;
     this.polling = undefined;
     this.discovering = undefined;
     this.pollTimer = undefined;
@@ -148,6 +174,12 @@ export class BleBoxApp {
         }
       }
     }
+    // A newly typed address is asked at once (it may have been seen by the search).
+    for (const address of this.config.addresses) {
+      if (!previous?.addresses.includes(address)) {
+        this.probes.delete(address);
+      }
+    }
     // Gladys keeps the status and the Discovery tab in memory: sent again at every start.
     this.lastStatus = undefined;
     this.transports.clear();
@@ -164,8 +196,10 @@ export class BleBoxApp {
     this.publisher.stop();
     this.timers.clearInterval(this.pollTimer);
     this.pollTimer = undefined;
-    for (const handle of this.followUps) {
-      this.timers.clearTimeout(handle);
+    for (const handles of this.followUps.values()) {
+      for (const handle of handles) {
+        this.timers.clearTimeout(handle);
+      }
     }
     this.followUps.clear();
     if (this.persistTimer) {
@@ -184,8 +218,27 @@ export class BleBoxApp {
   tick() {
     return this.poll()
       .then((changed) => (changed ? this.publishDevices() : undefined))
-      .then(() => this.updateStatus())
+      .then(() => {
+        this.searchLost();
+        this.updateStatus();
+      })
       .catch((err) => this.logger.warn(`Polling failed: ${reasonOf(err)}`));
+  }
+
+  /**
+   * A device that no longer answers at its address (a new DHCP lease) is
+   * searched by mDNS, at most every 5 minutes, in the background: found by
+   * its id at another address, it moves there.
+   */
+  searchLost() {
+    const lost = this.records.some((r) => !r.address || this.reachable.get(r.id) === false);
+    if (!lost || this.now() - this.lastLostSearch < TIMINGS.lostSearch) {
+      return;
+    }
+    this.lastLostSearch = this.now();
+    this.discover()
+      .then(() => this.updateStatus())
+      .catch((err) => this.logger.debug(`Search failed: ${reasonOf(err)}`));
   }
 
   persist() {
@@ -298,6 +351,7 @@ export class BleBoxApp {
       changed = true;
       if (existing && existing.address !== address) {
         this.logger.info(`${record.product} ${record.id} is now at ${address}`);
+        this.failures.delete(identity.id);
         for (const [conflict, ids] of this.conflicts) {
           if (ids[0] === identity.id) {
             this.conflicts.delete(conflict);
@@ -310,8 +364,12 @@ export class BleBoxApp {
     return changed;
   }
 
-  /** Asks an address what it is, and its layout. */
-  async probe(address) {
+  /**
+   * Asks an address what it is, and its layout. `anonymous`: an address only
+   * announced on the network (neither typed nor known) never gets the
+   * credentials; a password there is said in the status instead.
+   */
+  async probe(address, { anonymous = false } = {}) {
     const status = { lastTry: this.now() };
     this.probes.set(address, status);
     const block = this.blockOf(address);
@@ -320,7 +378,7 @@ export class BleBoxApp {
       return { changed: false };
     }
     try {
-      const auth = this.config.auth;
+      const auth = anonymous ? undefined : this.config.auth;
       const identity = parseIdentity(await this.client.info(address, { auth }));
       if (identity.error) {
         status.error = identity.error === 'invalid' ? 'invalid' : 'unsupported';
@@ -337,6 +395,11 @@ export class BleBoxApp {
       this.onSuccess(address);
       return { changed: this.remember(identity, config, address, layout), identity };
     } catch (err) {
+      if (anonymous && err.kind === 'auth') {
+        // No credentials were sent: nothing to stop, the user types the address.
+        status.error = 'typeToAuthenticate';
+        return { changed: false, error: err };
+      }
       status.error = err.kind ?? 'error';
       this.onFailure(address, err);
       this.logger.debug(`${address}: ${reasonOf(err)}`);
@@ -356,7 +419,8 @@ export class BleBoxApp {
   /**
    * The device answering at a known address is still this one (a DHCP lease
    * may give the address to another device), and its layout read again.
-   * False when it is not: the device waits to be found again.
+   * False when it is not: the device waits to be found again; 'updated' when
+   * a firmware update changed its API level (its paths follow).
    */
   async verify(record, { timeout } = {}) {
     const address = record.address;
@@ -364,6 +428,17 @@ export class BleBoxApp {
     const identity = parseIdentity(await this.client.info(address, { auth, timeout }));
     if (identity.id === record.id) {
       this.verified.set(record.id, this.now());
+      const config = !identity.error && configOf(identity.type, identity.apiLevel);
+      if (
+        config &&
+        config.kind === record.kind &&
+        (identity.apiLevel !== record.apiLevel || identity.firmware !== record.firmware)
+      ) {
+        record.apiLevel = identity.apiLevel;
+        record.firmware = identity.firmware;
+        this.persist();
+        return 'updated';
+      }
       return true;
     }
     this.logger.warn(
@@ -389,9 +464,12 @@ export class BleBoxApp {
   async doPoll() {
     let changed = false;
     const known = new Set(this.records.map((record) => record.address));
+    // An address that never answered: asked again every minute, never faster
+    // than the refresh interval.
+    const retry = Math.max(TIMINGS.probeRetry, this.config.pollInterval * 1000);
     const due = this.config.addresses.filter((address) => {
       const status = this.probes.get(address);
-      return !known.has(address) && (!status || this.now() - status.lastTry >= TIMINGS.probeRetry);
+      return !known.has(address) && (!status || this.now() - status.lastTry >= retry);
     });
     for (const result of await mapLimit(due, TIMINGS.probeConcurrency, (a) => this.probe(a))) {
       changed ||= result.changed;
@@ -402,8 +480,26 @@ export class BleBoxApp {
     return changed || results.some(Boolean);
   }
 
-  /** Reads one device and records its values; true when its Gladys device changes. */
-  async read(record) {
+  /**
+   * Reads one device and records its values; true when its Gladys device
+   * changes. A read already running for the device is shared (a poll and the
+   * reads after a command never ask it twice at once).
+   */
+  read(record) {
+    const running = this.reads.get(record.id);
+    if (running) {
+      return running;
+    }
+    const promise = this.doRead(record).finally(() => {
+      if (this.reads.get(record.id) === promise) {
+        this.reads.delete(record.id);
+      }
+    });
+    this.reads.set(record.id, promise);
+    return promise;
+  }
+
+  async doRead(record) {
     const { id, address } = record;
     if (!address || this.blockOf(address)) {
       return false;
@@ -412,19 +508,23 @@ export class BleBoxApp {
     if (failure && this.now() < failure.next) {
       return false;
     }
-    const config = configOf(record.type, record.apiLevel);
+    let config = configOf(record.type, record.apiLevel);
     const auth = this.config.auth;
     let changed = false;
     try {
       if (this.needsVerify(record)) {
-        if (!(await this.verify(record))) {
+        const verified = await this.verify(record);
+        if (!verified) {
           return true;
         }
+        if (verified === 'updated') {
+          changed = true;
+          config = configOf(record.type, record.apiLevel);
+        }
         if (config.extended && config.extended !== config.state) {
-          changed = this.updateLayout(
-            record,
-            await this.client.get(address, config.extended, { auth }),
-          );
+          changed =
+            this.updateLayout(record, await this.client.get(address, config.extended, { auth })) ||
+            changed;
         }
       }
       const data = await this.client.get(address, config.state, { auth });
@@ -656,6 +756,12 @@ export class BleBoxApp {
     if (unsupported.length > 0) {
       parts.push(T.unsupported(unsupported));
     }
+    const protectedOnes = [...this.probes]
+      .filter(([, s]) => s.error === 'typeToAuthenticate')
+      .map(([address]) => address);
+    if (protectedOnes.length > 0) {
+      parts.push(T.typeToAuthenticate(protectedOnes));
+    }
     for (const [address, [previous, next]] of this.conflicts) {
       parts.push(T.sameAddress(address, previous, next));
     }
@@ -672,44 +778,62 @@ export class BleBoxApp {
 
   // --- Search ------------------------------------------------------------------
 
-  /** mDNS through Gladys, then the typed addresses; one search at a time. */
-  discover() {
+  /**
+   * mDNS through Gladys, then the typed addresses; one search at a time.
+   * `user`: asked by the user, refused credentials are tried again (a pause
+   * is kept); a background search (a lost device) leaves every block.
+   */
+  discover({ user = false } = {}) {
     if (!this.discovering) {
-      this.discovering = this.doDiscover().finally(() => {
+      this.discovering = this.doDiscover({ user }).finally(() => {
         this.discovering = undefined;
       });
     }
     return this.discovering;
   }
 
-  async doDiscover() {
-    let services = [];
-    let failed = false;
-    try {
-      services = await this.gladys.scanNetwork('mdns', { timeoutSeconds: TIMINGS.scanSeconds });
-    } catch (err) {
-      failed = true;
-      this.logger.info(`mDNS search failed: ${reasonOf(err)}`);
+  /** The mDNS services; within 10 s of the last scan, its results (Gladys answers 429). */
+  async browse() {
+    if (this.lastScan && this.now() - this.lastScan.at < TIMINGS.scanSpacing) {
+      return { services: this.lastScan.services, failed: false };
     }
-    const addresses = new Set(this.config.addresses);
-    for (const service of (Array.isArray(services) ? services : []).slice(0, LIMITS.devices)) {
-      const ip = (service?.addresses ?? []).find((a) => typeof a === 'string' && !a.includes(':'));
+    try {
+      const services = await this.gladys.scanNetwork('mdns', {
+        timeoutSeconds: TIMINGS.scanSeconds,
+      });
+      this.lastScan = { at: this.now(), services: Array.isArray(services) ? services : [] };
+      return { services: this.lastScan.services, failed: false };
+    } catch (err) {
+      this.logger.info(`mDNS search failed: ${reasonOf(err)}`);
+      return { services: [], failed: true };
+    }
+  }
+
+  async doDiscover({ user }) {
+    const { services, failed } = await this.browse();
+    const typed = new Set(this.config.addresses);
+    const known = new Set(this.records.map((r) => r.address).filter(Boolean));
+    const addresses = new Set(typed);
+    for (const service of services.slice(0, LIMITS.devices)) {
+      const ip = (service?.addresses ?? []).find((a) => isLanUnicast(a));
       const port = Number.isInteger(service?.port) ? service.port : 80;
       const address = ip ? parseAddress(`${ip}:${port}`) : undefined;
       if (address) {
         addresses.add(address);
       }
     }
-    // A search is asked by the user: refused credentials are tried again, a pause is kept.
-    for (const address of addresses) {
-      if (this.data.blocks[address]?.kind === 'auth') {
-        delete this.data.blocks[address];
-        this.persist();
+    if (user) {
+      for (const address of addresses) {
+        if (this.data.blocks[address]?.kind === 'auth') {
+          delete this.data.blocks[address];
+          this.persist();
+        }
       }
     }
     const results = await mapLimit([...addresses], TIMINGS.probeConcurrency, async (address) => ({
       address,
-      ...(await this.probe(address)),
+      // The credentials only go to your modules: typed or already known addresses.
+      ...(await this.probe(address, { anonymous: !typed.has(address) && !known.has(address) })),
     }));
     if (results.some((r) => r.changed)) {
       await this.publishDevices();
@@ -718,14 +842,16 @@ export class BleBoxApp {
   }
 
   async scan() {
-    await this.discover().catch((err) => this.logger.warn(`Search failed: ${reasonOf(err)}`));
+    await this.discover({ user: true }).catch((err) =>
+      this.logger.warn(`Search failed: ${reasonOf(err)}`),
+    );
     await this.poll();
     await this.publishDevices();
     this.updateStatus();
   }
 
   async findDevices() {
-    const { failed, found } = await this.discover();
+    const { failed, found } = await this.discover({ user: true });
     this.updateStatus();
     if (found.length === 0) {
       return failed && this.config.addresses.length === 0 ? T.find.failed : T.find.none;
@@ -741,7 +867,7 @@ export class BleBoxApp {
   // --- Commands --------------------------------------------------------------
 
   refusal(text) {
-    const error = new Error(word(text, this.config.language));
+    const error = new Error(word(text, this.config?.language ?? 'fr'));
     error.refusal = true;
     return error;
   }
@@ -749,11 +875,9 @@ export class BleBoxApp {
   async setValue(_device, feature, value) {
     // The deadlines count from the arrival of the command, before any wait.
     const received = this.now();
-    let target = this.features.get(feature?.external_id);
-    if (!target) {
-      await this.publishDevices();
-      target = this.features.get(feature?.external_id);
-    }
+    // Before the first start, or a feature not published: a refusal, never a
+    // publication awaited by the ack.
+    const target = this.data && this.config && this.features.get(feature?.external_id);
     const record = target && this.data.devices[target.id];
     if (!record) {
       throw this.refusal(ERRORS.unknownDevice);
@@ -765,11 +889,12 @@ export class BleBoxApp {
       // A feature kept from before: a relay no longer declared safe, a former light mode.
       throw this.refusal(/^relay-\d+$/.test(target.key) ? ERRORS.unsafeRelay : ERRORS.readOnly);
     }
-    const action = this.actionOf(record, entry, value);
+    const action = { deviceId: record.id, ...this.actionOf(record, entry, value) };
     this.checkOption(action);
     const ticket = { action, cancelled: false, sent: false };
     if (action.protective) {
-      // Never behind the queue, and an opening still waiting to leave is cancelled.
+      // Never behind the queue, and an opening or a heating command still
+      // waiting to leave is cancelled.
       for (const pending of this.tickets.get(record.id) ?? []) {
         if (!pending.sent) {
           pending.cancelled = true;
@@ -797,19 +922,33 @@ export class BleBoxApp {
     }
   }
 
-  /** The option of a command, read now; refused (nothing sent) when off. */
+  /**
+   * The permission of a command, read now from the current configuration;
+   * refused (nothing sent) when off.
+   */
   checkOption(action) {
     if (action.option === 'gate' && !this.config.allowGateOpen) {
       throw this.refusal(ERRORS.gateDisabled);
     }
+    if (action.option === 'gatePulse' && !this.config.allowGateOpen) {
+      throw this.refusal(ERRORS.gatePulseDisabled);
+    }
     if (action.option === 'heating' && !this.config.allowHeating) {
       throw this.refusal(ERRORS.heatingDisabled);
+    }
+    if (
+      action.relay !== undefined &&
+      !isSafeRelay(this.config.safeRelays, action.deviceId, action.relay)
+    ) {
+      throw this.refusal(ERRORS.unsafeRelay);
     }
   }
 
   /**
-   * What a command asks, its value checked strictly:
-   * `{ name, plan(reading) -> { path, body? } | { unchanged }, fresh, protective, sensitive, option }`.
+   * What a command asks, its value checked strictly: `{ name, plan(reading)
+   * -> { path, body? } | { unchanged }, fresh, protective, sensitive, option,
+   * relay, pulse }`. `fresh`: decided on the state read just now. `pulse`: a
+   * gate movement, one at a time, guarded after it left.
    */
   actionOf(record, { key, spec }, value) {
     const number = strictNumber(value);
@@ -820,7 +959,7 @@ export class BleBoxApp {
       const index = spec.relay;
       const path = config.relayCommand === 'indexed' ? `/s/${index}/${number}` : `/s/${number}`;
       if (config.relayCommand !== 'indexed' && index !== 0) throw this.refusal(ERRORS.readOnly);
-      return { name: `relay ${index} ${number}`, plan: () => ({ path }) };
+      return { name: `relay ${index} ${number}`, relay: index, plan: () => ({ path }) };
     }
     if (record.kind === 'shutter') {
       if (key === 'state') {
@@ -849,7 +988,7 @@ export class BleBoxApp {
     }
     if (record.kind === 'gate') {
       if (number !== BUTTON_PUSH.PRESSED) throw bad();
-      return this.gateAction(key);
+      return this.gateAction(record, key);
     }
     if (record.kind === 'thermo') {
       return this.thermoAction(key, number);
@@ -861,21 +1000,31 @@ export class BleBoxApp {
   }
 
   /**
-   * The gate, after blebox-uniapi (GateBox, GateBoxB): the primary output
-   * opens (or steps: open, stop, close, stop) and the secondary one is a stop,
-   * a close (open/close mode) or a walk-in. A step-by-step pulse is only sent
-   * when the state read just now makes its effect certain.
+   * The gate, after blebox-uniapi (GateBox, GateBoxB) and the official API:
+   * - API >= 20210118: /s/o and /s/c, the module decides on its limit
+   *   switches (409 when it cannot tell): closing is always allowed;
+   * - older: the primary output (/s/p) opens, or steps (open, stop, close,
+   *   stop): in step-by-step mode closing is the same pulse as opening, so
+   *   it needs the opening permission, and is only sent from a gate seen
+   *   fully open; the secondary output (/s/s) is a stop, a close (open/close
+   *   mode, always allowed) or a walk-in.
    */
-  gateAction(key) {
+  gateAction(record, key) {
+    const direct = record.apiLevel >= GATE_DIRECT_API_LEVEL;
+    const layoutMode = record.layout?.mode;
     const modeOf = (r) => r.mode ?? GATE_MODE.STEP_BY_STEP;
+    const guarded = (r) => this.checkGateGuard(record, r);
     if (key === 'open') {
       return {
         name: 'gate open',
         fresh: true,
         sensitive: true,
         option: 'gate',
+        pulse: true,
         plan: (r) => {
+          guarded(r);
           if (r.position === 100) return { unchanged: true };
+          if (record.apiLevel >= GATE_DIRECT_API_LEVEL) return { path: '/s/o' };
           if (modeOf(r) === GATE_MODE.STEP_BY_STEP && (r.position !== 0 || r.moving === true)) {
             throw this.refusal(ERRORS.gateNotClosed);
           }
@@ -884,15 +1033,30 @@ export class BleBoxApp {
       };
     }
     if (key === 'close') {
+      if (layoutMode === GATE_MODE.ONLY_OPEN) throw this.refusal(ERRORS.gateClosesAlone);
+      const separate = direct || layoutMode === GATE_MODE.OPEN_CLOSE;
       return {
         name: 'gate close',
         fresh: true,
-        protective: true,
+        pulse: true,
+        // A close that can never open: always allowed, first in line. A
+        // step-by-step pulse can: the opening permission, in the queue.
+        ...(separate ? { protective: true } : { sensitive: true, option: 'gatePulse' }),
         plan: (r) => {
-          if (r.position === 0 && r.moving !== true) return { unchanged: true };
-          if (modeOf(r) === GATE_MODE.OPEN_CLOSE) return { path: '/s/s' };
+          guarded(r);
           if (modeOf(r) === GATE_MODE.ONLY_OPEN) throw this.refusal(ERRORS.gateClosesAlone);
-          if (r.position !== 100 || r.moving === true) throw this.refusal(ERRORS.gateNotOpen);
+          if (r.position === 0 && r.moving !== true) return { unchanged: true };
+          // The API level read just now (a firmware update).
+          if (record.apiLevel >= GATE_DIRECT_API_LEVEL) return { path: '/s/c' };
+          if (modeOf(r) === GATE_MODE.OPEN_CLOSE) return { path: '/s/s' };
+          // The wiring changed since the command was classified: never a
+          // pulse without the permission.
+          if (separate) throw this.refusal(ERRORS.gateModeChanged);
+          if (r.position !== 100 || r.moving === true) {
+            throw this.refusal(
+              r.extra === GATE_EXTRA.STOP ? ERRORS.gateNotOpen : ERRORS.gateNotOpenNoStop,
+            );
+          }
           return { path: '/s/p' };
         },
       };
@@ -917,8 +1081,8 @@ export class BleBoxApp {
         sensitive: true,
         option: 'gate',
         plan: (r) => {
+          // No mode before API 20230102: never wired as open/close then.
           if (
-            r.mode === undefined ||
             r.mode === GATE_MODE.OPEN_CLOSE ||
             (r.extra !== GATE_EXTRA.WALK_IN && r.extra !== GATE_EXTRA.OTHER)
           ) {
@@ -929,6 +1093,27 @@ export class BleBoxApp {
       };
     }
     throw this.refusal(ERRORS.readOnly);
+  }
+
+  /**
+   * After a gate pulse, no other one until the gate is read elsewhere than
+   * where it started (never lifted on an unknown or unchanged position), or
+   * the guard expires: a second pulse would stop or reverse it.
+   */
+  checkGateGuard(record, reading) {
+    const guard = this.gateGuards.get(record.id);
+    if (!guard) {
+      return;
+    }
+    if (this.now() >= guard.until) {
+      this.gateGuards.delete(record.id);
+      return;
+    }
+    if (reading.position !== undefined && reading.position !== guard.from) {
+      this.gateGuards.delete(record.id);
+      return;
+    }
+    throw this.refusal(ERRORS.gateJustCommanded);
   }
 
   thermoAction(key, number) {
@@ -959,12 +1144,9 @@ export class BleBoxApp {
     }
     if (key === 'mode') {
       if (number === THERMOSTAT_MODE.OFF) {
-        return {
-          name: 'thermo off',
-          fresh: true,
-          protective: true,
-          plan: (r) => (r.state === THERMO_STATE.OFF ? { unchanged: true } : { path: '/s/0' }),
-        };
+        // Idempotent, so always sent: never a state read that could fail or
+        // say "already off" while a switching on is still on its way.
+        return { name: 'thermo off', protective: true, plan: () => ({ path: '/s/0' }) };
       }
       if (number !== THERMOSTAT_MODE.HEATING && number !== THERMOSTAT_MODE.COOLING) {
         throw this.refusal(ERRORS.badValue);
@@ -1014,8 +1196,18 @@ export class BleBoxApp {
     };
   }
 
-  /** One command: the fresh read, the plan, the request. */
+  /** One command: the identity, the fresh read, the plan, the request. */
   async run(record, action, received, ticket) {
+    try {
+      return await this.runCommand(record, action, received, ticket);
+    } finally {
+      if (this.gateFlight.get(record.id) === ticket) {
+        this.gateFlight.delete(record.id);
+      }
+    }
+  }
+
+  async runCommand(record, action, received, ticket) {
     const sendBy = received + TIMINGS.commandSendBy;
     const answerBy = received + TIMINGS.commandAnswerBy;
     const auth = this.config.auth;
@@ -1025,23 +1217,28 @@ export class BleBoxApp {
       if (!record.address || this.data.devices[record.id] !== record) {
         throw this.refusal(ERRORS.unknownDevice);
       }
-      if (this.blockOf(record.address)) throw this.refusal(ERRORS.blocked);
+      // A pause asked by the device (429, 5xx) holds the reads, never a
+      // protective command (one try); refused credentials hold everything.
+      const block = this.blockOf(record.address);
+      if (block && (block.kind === 'auth' || !action.protective)) {
+        throw this.refusal(ERRORS.blocked);
+      }
       if (this.now() > sendBy) throw this.refusal(ERRORS.tooSlow);
     };
     check();
     const address = record.address;
-    const config = configOf(record.type, record.apiLevel);
     let reading;
     const left = () => sendBy - this.now() - 200;
     try {
-      // The device at the address is this one: always before a gate or a
-      // heating command, else when the last check is old.
-      if (action.fresh || this.needsVerify(record)) {
-        if (left() <= 0) throw this.refusal(ERRORS.tooSlow);
-        if (!(await this.verify(record, { timeout: left() }))) {
-          throw this.refusal(ERRORS.unknownDevice);
-        }
+      // The device at the address is this one, before every command (a DHCP
+      // lease may have given the address to another module).
+      if (left() <= 0) throw this.refusal(ERRORS.tooSlow);
+      const verified = await this.verify(record, { timeout: left() });
+      if (!verified) {
+        throw this.refusal(ERRORS.unknownDevice);
       }
+      // The paths of the API level read just now (a firmware update).
+      const config = configOf(record.type, record.apiLevel);
       if (action.fresh) {
         check();
         if (left() <= 0) throw this.refusal(ERRORS.tooSlow);
@@ -1058,10 +1255,20 @@ export class BleBoxApp {
         err.kind === 'timeout' && left() <= 0 ? ERRORS.tooSlow : ERRORS.unknownState,
       );
     }
+    // Cancelled or no longer allowed while it read: said so before any other reason.
+    check();
     const plan = action.plan(reading ?? {});
     if (plan.unchanged) {
       // Already so: nothing sent.
       return;
+    }
+    if (action.pulse) {
+      // One gate movement at a time: a second one would stop or reverse it.
+      const flying = this.gateFlight.get(record.id);
+      if (flying && flying !== ticket) {
+        throw this.refusal(ERRORS.gateJustCommanded);
+      }
+      this.gateFlight.set(record.id, ticket);
     }
     check();
     this.logger.info(`${record.product} ${record.id}: ${action.name}`);
@@ -1093,15 +1300,19 @@ export class BleBoxApp {
       this.followUp(record);
       if (err.kind === 'auth' || (err.kind === 'http' && err.status >= 400 && err.status <= 499)) {
         this.logger.warn(`${record.product} ${record.id}: ${action.name} refused (${reason})`);
-        throw this.refusal(ERRORS.refused(reason));
+        throw this.refusal(
+          record.kind === 'gate' && err.status === 409 ? ERRORS.gateUnsure : ERRORS.refused(reason),
+        );
       }
       // A silence, a dropped connection, a 5xx, an answer that is not JSON:
       // the request may have reached the device.
+      this.guardGate(record, action, reading);
       this.logger.warn(
         `${record.product} ${record.id}: ${action.name} sent, NOT confirmed (${reason})`,
       );
       throw this.refusal(ERRORS.sentUnconfirmed(reason));
     }
+    this.guardGate(record, action, reading);
     // Relays and lights answer with their new state.
     if (record.kind === 'switch' || record.kind === 'light' || record.kind === 'dimmer') {
       const shown = readingOf(record.kind, answer, record.layout);
@@ -1112,19 +1323,37 @@ export class BleBoxApp {
     this.followUp(record);
   }
 
-  /** Reads after a command, spaced: a gate or a shutter moves for a while. */
+  /** After a gate pulse that may have left: the guard, from the position read before it. */
+  guardGate(record, action, reading) {
+    if (!action.pulse) {
+      return;
+    }
+    const length = Math.min(reading?.pulseMs ?? 1000, 10_000);
+    this.gateGuards.set(record.id, {
+      from: reading?.position,
+      until: this.now() + Math.min(TIMINGS.gateGuardMax, length + TIMINGS.gateGuard),
+    });
+  }
+
+  /**
+   * Reads after a command, spaced: a gate or a shutter moves for a while.
+   * One series per device: a new command replaces the reads of the previous
+   * one, and a read shares the one of the polling if it runs (read()).
+   */
   followUp(record) {
-    for (const delay of TIMINGS.followUps) {
-      const handle = this.timers.setTimeout(() => {
-        this.followUps.delete(handle);
+    for (const handle of this.followUps.get(record.id) ?? []) {
+      this.timers.clearTimeout(handle);
+    }
+    const handles = TIMINGS.followUps.map((delay) =>
+      this.timers.setTimeout(() => {
         // Never sooner than a backoff or a pause: read() checks both.
         if (this.data.devices[record.id] === record) {
           this.read(record)
             .then((changed) => (changed ? this.publishDevices() : undefined))
             .catch(() => this.logger.warn('Read after a command failed'));
         }
-      }, delay);
-      this.followUps.add(handle);
-    }
+      }, delay),
+    );
+    this.followUps.set(record.id, handles);
   }
 }

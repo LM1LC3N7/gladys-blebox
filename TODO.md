@@ -24,12 +24,14 @@ up to date at the end of every milestone.
       (credentials, pauses), transport badges, manifest, docs en/fr. Tested
       against sample answers and fakes only. The store validator was not run
       by the development agent (it cannot): to run from the real terminal.
+- [x] **Review 1 fixes** (2026-10-20): B1, I1-I5, M1-M6 of the review (see the Decisions).
 - [ ] **Milestone 2 — real hardware** (testers with the modules): record real
       answers as fixtures, fix what differs. To check first:
   - the mDNS service `_bbxsrv._tcp` and the port it gives;
   - the answer of the `/s/...` commands (the state of the module, as
     assumed for the relays?) and of `POST /api/rgbw/set`;
-  - gateBox: `currentPos` without limit switches (-1 always?), the legacy
+  - gateBox: `/s/o` and `/s/c` (answer, 409), `gatePulseTimeMs` for the
+    guard, `currentPos` without limit switches (-1 always?), the legacy
     API (`/api/gate/state`) and whether a step-by-step pulse at 100 % always
     closes;
   - thermoBox: `operatingState` values (mapped as Home Assistant: 1 heating,
@@ -74,39 +76,72 @@ up to date at the end of every milestone.
   longer declared safe keeps its `switch` feature, whose commands are
   refused.
 - Gate: never a `switch` nor a commandable `binary`; an `opening-sensor`
-  (closed at 0 %), a read-only position, and `button`/`push` features.
-  Opening and the second output (walk-in, other) need "Allow opening the
+  (closed at 0 %), a read-only position, and `button`/`push` features, only
+  the ones the wiring allows (no close in only-open mode, a stop only when
+  the second output is a stop outside open/close mode; a created one is
+  kept). Opening and the second output (walk-in, other; usable without
+  `openCloseMode`, as on API 20200831-20221231) need "Allow opening the
   gate" (off by default), checked on arrival, after the fresh read and in
-  `beforeSend`. Closing and stopping are never blocked by an option nor the
-  queue, and cancel an opening or a heating command not sent yet. The
-  primary output of a step-by-step gate steps (open, stop, close, stop): a
-  pulse is only sent to open from 0 % or to close from 100 % (read just
-  now, not moving); otherwise refused, the stop button stays. Open/close
-  mode: the second output closes, there is no stop. Only-open mode: no
-  close. The legacy API (no `openCloseMode`) is handled as step-by-step.
+  `beforeSend`.
+  - Review 1 decision (B1): from API 20210118, open is `/s/o` (option) and
+    close is `/s/c` (always allowed, the module decides on its limit
+    switches, 409 -> "refused, neither fully open nor closed"); the state is
+    still read first. Open/close mode on an older API: close is the second
+    output, always allowed. Step-by-step (or unknown mode) on an older API:
+    the primary output steps (open, stop, close, stop), so the close pulse
+    IS the open pulse: it needs "Allow opening the gate" too (checked again
+    in `beforeSend`), and is only sent from 100 % (open from 0 %).
+  - Review 1 (I1): one pulse (`/s/p`, `/s/o`, `/s/c`) at a time per gate,
+    the second one refused; after a pulse that may have left, a guard keeps
+    the starting position and refuses any pulse until a position read is
+    different (never lifted on an unknown or equal one) or it expires
+    (pulse length + 8 s, 20 s at most). Recent APIs give no `desiredPos`:
+    a move is never known, only the limit switches (0, 50, 100, -1).
+  - Stop (`/s/s`, second output read as "stop" just now) is never blocked
+    and, with a close that cannot open, cancels an opening or a heating
+    command not sent yet.
 - thermoBox: its output may drive any heater, so it is never a switch: a
   thermostat `mode` (0 off, 1 heating, 2 cooling) and `target-temperature`.
-  Switching off is never blocked. Switching on and the setpoint need "Allow
-  the heating commands" (off by default); the setpoint is bounded by
-  max(5 °C, device minimum) and min(ceiling, 30 °C, device maximum), the
-  ceiling 25 °C by default, 10 to 30 °C. Switching on never changes the
-  device's own mode (a heater is never switched on as a cooler). The room
-  sensor is the lowest id that is not the safety sensor; the others are
-  `probe` temperatures (out of the room average).
-- Commands: decided on a state read just now (never in memory), after
-  checking the id at the address (always for the fresh-read commands, else
-  when older than 10 minutes); sent within 3.5 s of the click or refused
-  unsent; answered by 4.3 s; a request that may have left (silence, dropped
-  connection, 5xx, an answer that is not JSON) is "sent, without
-  confirmation", with reads after 1.5, 6 and 20 s; never retried. One queue
-  per device; the ack never waits for a publication.
+  Switching off (review 1, I3): identity checked, then `/s/0` always sent
+  (idempotent), never a state read nor "already off". Switching on and the
+  setpoint need "Allow the heating commands" (off by default); the setpoint
+  is bounded by max(5 °C, device minimum) and min(ceiling, 30 °C, device
+  maximum), the ceiling 25 °C by default, 10 to 30 °C. Switching on never
+  changes the device's own mode (a heater is never switched on as a
+  cooler). The room sensor is the lowest id that is not the safety sensor;
+  the others are `probe` temperatures (out of the room average).
+- Commands: the id at the address is checked before EVERY command (review
+  1, I4: a DHCP swap must never switch another module); gate, heating on,
+  setpoint, lights decided on a state read just now (never in memory); sent
+  within 3.5 s of the click or refused unsent; answered by 4.3 s; a request
+  that may have left (silence, dropped connection, 5xx, an answer that is
+  not JSON) is "sent, without confirmation"; never retried. One queue per
+  device; the ack never waits for a publication (an unknown feature is
+  refused, never a publication awaited; a command before the first start is
+  a refusal). A relay command carries its relay: the safe list is checked
+  again on arrival, after the queue and in `beforeSend` (I5). One series of
+  reads after a command per device (1.5, 6, 20 s), sharing a read in
+  progress.
 - Failures: 401/403 = credentials refused (a stop persisted per address:
-  15 min, 1 h, 6 h, then every 24 h; other credentials or the search try
-  again); 429 or 5xx = a pause of 1 min to 6 h (Retry-After, else doubling),
-  persisted and capped when read back; other failures: 30 s, 1, 2, 5 min,
-  never faster than the interval. A reconnection to Gladys clears none of
-  them, and publishes the status and the Discovery tab again.
-- Energy: no index in v1 (the approved guard of gladys-p1-monitor is not
+  15 min, 1 h, 6 h, then every 24 h; other credentials or the search asked
+  by the user try again; a background search does not); 429 or 5xx = a
+  pause of 1 min to 6 h (Retry-After, else doubling), persisted and capped
+  when read back, holding the reads, the openings and switching on; review
+  1 decision (I2): closing (`/s/c` or a separate output), stopping and
+  switching off ignore a pause (one try), refused credentials still hold
+  them. Other failures: 30 s, 1, 2, 5 min, never faster than the interval;
+  an address that never answered is asked again every max(1 min, interval).
+  A reconnection to Gladys clears none of them, and publishes the status
+  and the Discovery tab again.
+- Search (review 1, M6): only LAN unicast IPv4 from mDNS (no loopback,
+  0.x, link-local, multicast, .0, .255); the credentials only go to typed or
+  already known addresses (an announced protected module is named in the
+  status, to be typed); one scan per 10 s (the last results reused); a lost
+  module (unreachable or address taken) searched again every 5 minutes.
+- /data (review 1, M3): block keys must be addresses (`__proto__` is not);
+  a record is kept only if its type, API level, kind, address and layout
+  agree. A firmware update (another `apiLevel` at the same id) moves the
+  paths with it.- Energy: no index in v1 (the approved guard of gladys-p1-monitor is not
   wired yet); `forwardActiveEnergy` and the switchBox `powerConsumption`
   (energy over a period, not an index) are not published.
 - Units: only the ones the core lists for the category

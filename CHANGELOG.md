@@ -22,13 +22,29 @@ the notes of the version's GitHub Release.
 - shutterBox: open, close, stop, and the position once calibrated (shutters
   and curtains).
 - gateBox: open or closed, position, and open, close, stop and second output
-  buttons, never a switch. Opening is off by default; in step-by-step mode a
-  pulse is only sent when its effect is certain from the state read just
-  now; closing and stopping are never blocked and cancel a pending opening.
+  buttons (only the ones its wiring allows), never a switch. Opening is off
+  by default. From API 20210118 the gateBox's own `/s/o` and `/s/c` are used
+  (it decides on its limit switches, 409 when it cannot tell), and closing
+  is always allowed. On an older step-by-step gateBox, closing is the same
+  pulse as opening: it needs the opening permission, and is only sent from a
+  gate read fully open (fully closed to open). One pulse at a time, and none
+  until the gate is seen elsewhere than where the last pulse found it (or a
+  few seconds). Stopping is always allowed; stopping and closing cancel a
+  pending opening.
 - thermoBox: room and probe temperatures, setpoint, heating on/off,
   operating state, safety cut-off. Switching on and the setpoint are off by
   default, the setpoint is bounded by a ceiling (25 °C by default, 30 °C at
-  most) and the range of the device; switching off is never blocked.
+  most) and the range of the device; switching off is always sent (`/s/0`,
+  no state read).
+- The identity of the module at the address is checked before every
+  command; a relay removed from the safe list is refused even while its
+  command waits.
+- A 429/5xx pause holds the reads, the openings and the switching on, never
+  closing, stopping or switching off (one try); refused credentials hold
+  everything.
+- The search: only LAN unicast addresses taken from mDNS, no credentials to
+  a module only announced on the network, one scan per 10 s, and a lost
+  module searched again every 5 minutes.
 - tempSensor, airSensor (PM2.5, PM10) and multiSensor (temperature,
   humidity, light level, wind, rain, flood, CO2, power, voltage, current).
 - Commands decided on a state read just now, sent within 3.5 s or refused

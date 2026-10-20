@@ -63,8 +63,8 @@
       "type": "secret",
       "label": { "en": "Password (optional)", "fr": "Mot de passe (facultatif)" },
       "description": {
-        "en": "Kept by Gladys in its database, never shown again, sent only to your BleBox modules (in clear on your local network: they have no https).",
-        "fr": "Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à vos modules BleBox (en clair sur votre réseau local : ils n'ont pas de https)."
+        "en": "Kept by Gladys in its database, never shown again, sent only to your BleBox modules: the typed addresses and the modules already added (in clear on your local network: they have no https). A module only found by the search gets no credentials.",
+        "fr": "Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à vos modules BleBox : les adresses saisies et les modules déjà ajoutés (en clair sur votre réseau local : ils n'ont pas de https). Un module seulement trouvé par la recherche ne reçoit pas les identifiants."
       },
       "required": false
     },
@@ -107,8 +107,8 @@
       "type": "section",
       "label": { "en": "Gate (gateBox)", "fr": "Portail (gateBox)" },
       "description": {
-        "en": "The gate is shown with buttons (open, close, stop), never as a switch. Closing and stopping are always allowed. Opening (and the walk-in output) is refused until you allow it below. In step-by-step mode, a pulse is only sent when the gate is seen fully closed (to open) or fully open (to close).",
-        "fr": "Le portail est affiché avec des boutons (ouvrir, fermer, arrêter), jamais comme un interrupteur. Fermer et arrêter sont toujours permis. L'ouverture (et la sortie portillon) est refusée tant que vous ne l'autorisez pas ci-dessous. En mode pas à pas, une impulsion n'est envoyée que si le portail est vu complètement fermé (pour ouvrir) ou complètement ouvert (pour fermer)."
+        "en": "The gate is shown with buttons (open, close, stop), never as a switch. Opening (and the walk-in output) is refused until you allow it below. Stopping, and closing on a gateBox that has its own close command (recent firmware, or open/close wiring), are always allowed. In step-by-step mode on an older gateBox, closing sends the same pulse as opening: it needs this permission too, and is only sent when the gate is seen fully open (fully closed to open). One pulse at a time: another one waits until the gate is seen moving.",
+        "fr": "Le portail est affiché avec des boutons (ouvrir, fermer, arrêter), jamais comme un interrupteur. L'ouverture (et la sortie portillon) est refusée tant que vous ne l'autorisez pas ci-dessous. Arrêter, et fermer sur un gateBox qui a sa propre commande de fermeture (micrologiciel récent, ou câblage ouverture/fermeture séparées), sont toujours permis. En mode pas à pas sur un gateBox plus ancien, fermer envoie la même impulsion qu'ouvrir : il faut donc aussi cette autorisation, et l'impulsion n'est envoyée que si le portail est vu complètement ouvert (complètement fermé pour ouvrir). Une impulsion à la fois : la suivante attend que le portail soit vu bouger."
       }
     },
     {
@@ -116,8 +116,8 @@
       "type": "boolean",
       "label": { "en": "Allow opening the gate", "fr": "Autoriser l'ouverture du portail" },
       "description": {
-        "en": "Off by default. On: the dashboard, the scenes and the voice assistants can open the gate.",
-        "fr": "Désactivé par défaut. Activé : le tableau de bord, les scènes et les assistants vocaux peuvent ouvrir le portail."
+        "en": "Off by default. On: the dashboard, the scenes and the voice assistants can open the gate (and close a step-by-step one, the same pulse).",
+        "fr": "Désactivé par défaut. Activé : le tableau de bord, les scènes et les assistants vocaux peuvent ouvrir le portail (et fermer un portail pas à pas, la même impulsion)."
       },
       "required": false,
       "default": false
@@ -127,8 +127,8 @@
       "type": "section",
       "label": { "en": "Heating (thermoBox)", "fr": "Chauffage (thermoBox)" },
       "description": {
-        "en": "By default Gladys only reads the thermoBox, and can switch it off. Once allowed, it can also switch it on and change its setpoint, never above the ceiling below nor outside the range of the thermoBox.",
-        "fr": "Par défaut Gladys ne fait que lire le thermoBox, et peut l'éteindre. Une fois autorisé, il peut aussi l'allumer et changer sa consigne, jamais au-dessus du plafond ci-dessous ni hors de la plage du thermoBox."
+        "en": "By default Gladys only reads the thermoBox, and can switch it off (even while the module asks to wait; only refused credentials stop it). Once allowed, it can also switch it on and change its setpoint, never above the ceiling below nor outside the range of the thermoBox.",
+        "fr": "Par défaut Gladys ne fait que lire le thermoBox, et peut l'éteindre (même quand le module demande d'attendre ; seuls des identifiants refusés l'en empêchent). Une fois autorisé, il peut aussi l'allumer et changer sa consigne, jamais au-dessus du plafond ci-dessous ni hors de la plage du thermoBox."
       }
     },
     {

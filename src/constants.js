@@ -24,6 +24,12 @@ export const BUTTON_PUSH = { PRESSED: 1 };
 
 /** gateBox `openCloseMode` (blebox-uniapi GateBoxControlType). */
 export const GATE_MODE = { STEP_BY_STEP: 0, ONLY_OPEN: 1, OPEN_CLOSE: 2 };
+/**
+ * From this API level a gateBox has /s/o and /s/c: it opens or closes
+ * deciding on its own limit switches (HTTP 409 when it cannot tell), never
+ * a toggle (official API documentation, technical.blebox.eu).
+ */
+export const GATE_DIRECT_API_LEVEL = 20210118;
 /** gateBox `extraButtonType` (blebox-uniapi GateBoxExtraButtonType). */
 export const GATE_EXTRA = { DISABLED: 0, STOP: 1, WALK_IN: 2, OTHER: 3 };
 
@@ -83,6 +89,16 @@ export const TIMINGS = {
   commandAnswerBy: 4300,
   /** Reads after a command (a gate or a shutter moves for a while). */
   followUps: [1500, 6000, 20_000],
+  /**
+   * After a gate pulse, no other pulse until the gate is seen elsewhere than
+   * where it started, or this long after the pulse (plus its own length).
+   */
+  gateGuard: 8000,
+  gateGuardMax: 20_000,
+  /** While a device is lost (unreachable, address taken), an mDNS search this often. */
+  lostSearch: 5 * 60_000,
+  /** Gladys accepts one network scan per 10 s: a newer search reuses the last results. */
+  scanSpacing: 10_500,
   /** Transient failures: the next reads, never sooner than the interval. */
   backoff: [30_000, 60_000, 120_000, 300_000],
   /** Credentials refused: the next tries, then every 24 h. */

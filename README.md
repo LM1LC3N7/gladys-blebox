@@ -39,8 +39,13 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (BleBoxApp)
   `POST /api/rgbw/set` (lights, the other channels masked with `--`).
 - **Safety**: a relay is read only until declared safe; the gate is never a
   switch (buttons only), its opening and the heating commands are off by
-  default; closing, stopping and switching off are never blocked and cancel
-  a pending opening. See [docs/en.md](docs/en.md#command-safety).
+  default. A recent gateBox closes with `/s/c` (it decides on its limit
+  switches); on an older step-by-step one, closing is the same pulse as
+  opening, so it needs the opening permission. One gate pulse at a time,
+  guarded until the gate is seen moving. Stopping, a separate close and
+  switching off ignore a 429/5xx pause and cancel a pending opening. The
+  identity of the module is checked before every command. See
+  [docs/en.md](docs/en.md#command-safety).
 
 ## Development
 

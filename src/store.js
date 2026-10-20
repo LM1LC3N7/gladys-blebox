@@ -8,12 +8,26 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { DEVICE_ID } from './config.js';
+import { DEVICE_ID, parseAddress } from './config.js';
 import { LIMITS, TIMINGS } from './constants.js';
+import { configOf } from './blebox/types.js';
 
 export const emptyData = () => ({ devices: {}, blocks: {} });
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** A known device as remember() writes it: its type, level, kind and address agree. */
+function validRecord(record) {
+  return (
+    isObject(record) &&
+    typeof record.type === 'string' &&
+    Number.isInteger(record.apiLevel) &&
+    configOf(record.type, record.apiLevel)?.kind === record.kind &&
+    typeof record.address === 'string' &&
+    (record.address === '' || parseAddress(record.address) === record.address) &&
+    isObject(record.layout)
+  );
+}
 
 /**
  * What a file holds, checked: unknown keys dropped, ids checked, a block
@@ -27,14 +41,19 @@ export function sanitize(data, now = Date.now()) {
   }
   if (isObject(data.devices)) {
     for (const [id, record] of Object.entries(data.devices).slice(0, LIMITS.devices)) {
-      if (DEVICE_ID.test(id) && isObject(record) && record.id === id) {
+      if (DEVICE_ID.test(id) && validRecord(record) && record.id === id) {
         base.devices[id] = record;
       }
     }
   }
   if (isObject(data.blocks)) {
     for (const [address, block] of Object.entries(data.blocks).slice(0, LIMITS.addresses)) {
-      if (!isObject(block) || !['auth', 'pause'].includes(block.kind)) {
+      // An address as the configuration gives it ("__proto__" is not one).
+      if (
+        parseAddress(address) !== address ||
+        !isObject(block) ||
+        !['auth', 'pause'].includes(block.kind)
+      ) {
         continue;
       }
       const longest = block.kind === 'auth' ? TIMINGS.authRetries.at(-1) : TIMINGS.pauseMax;
