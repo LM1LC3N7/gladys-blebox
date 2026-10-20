@@ -211,6 +211,10 @@ export const ERRORS = {
     'The gate was commanded just now and has not been seen moving yet: nothing sent. Use "Stop the gate", or try again in a few seconds.',
     "Le portail vient d'être commandé et n'a pas encore été vu bouger : rien n'a été envoyé. Utilisez « Arrêter le portail », ou réessayez dans quelques secondes.",
   ),
+  gateJustCommandedNoStop: both(
+    'The gate was commanded just now and has not been seen moving yet: nothing sent. Try again in a few seconds, or use the remote control of the gate.',
+    "Le portail vient d'être commandé et n'a pas encore été vu bouger : rien n'a été envoyé. Réessayez dans quelques secondes, ou utilisez la télécommande du portail.",
+  ),
   gateUnsure: both(
     'The gateBox refused: the gate is neither fully open nor fully closed (HTTP 409).',
     "Le gateBox a refusé : le portail n'est ni complètement ouvert ni complètement fermé (HTTP 409).",

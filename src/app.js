@@ -90,6 +90,12 @@ export function isLanUnicast(ip) {
   return !(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254) || d === 0 || d === 255);
 }
 
+/** The "just commanded" refusal: it advises the stop only when the gateBox has one. */
+const justCommanded = (r) =>
+  r?.extra === GATE_EXTRA.STOP && r?.mode !== GATE_MODE.OPEN_CLOSE
+    ? ERRORS.gateJustCommanded
+    : ERRORS.gateJustCommandedNoStop;
+
 /** A command value, strictly: a finite number or its exact text ('' and null are not 0). */
 const strictNumber = (value) => (typeof value === 'boolean' ? undefined : numberOf(value));
 
@@ -314,7 +320,7 @@ export class BleBoxApp {
   // --- Known devices -----------------------------------------------------------
 
   /** Adds or updates a known device; true when its Gladys device changes. */
-  remember(identity, config, address, layout) {
+  remember(identity, config, address, layout, { untrusted = false } = {}) {
     const devices = this.data.devices;
     const existing = devices[identity.id];
     if (!existing && Object.keys(devices).length >= LIMITS.devices) {
@@ -345,6 +351,8 @@ export class BleBoxApp {
       firmware: identity.firmware,
       address,
       layout: mergeLayout(config.kind, sameKind ? existing.layout : undefined, layout),
+      // Found only by an announcement: no credentials until the address is typed.
+      ...(untrusted ? { untrusted: true } : {}),
     };
     if (JSON.stringify(existing) !== JSON.stringify(record)) {
       devices[identity.id] = record;
@@ -393,7 +401,20 @@ export class BleBoxApp {
       );
       status.id = identity.id;
       this.onSuccess(address);
-      return { changed: this.remember(identity, config, address, layout), identity };
+      if (anonymous && (await this.stillAtItsAddress(identity.id, address))) {
+        // Another host announcing the id of a known module that still answers
+        // at its address: never moved there (it would get the credentials).
+        status.error = 'impersonation';
+        this.warnOnce(
+          `impersonation:${address}`,
+          `${address} announces the id of ${identity.id}, which still answers at its address`,
+        );
+        return { changed: false };
+      }
+      return {
+        changed: this.remember(identity, config, address, layout, { untrusted: anonymous }),
+        identity,
+      };
     } catch (err) {
       if (anonymous && err.kind === 'auth') {
         // No credentials were sent: nothing to stop, the user types the address.
@@ -405,6 +426,27 @@ export class BleBoxApp {
       this.logger.debug(`${address}: ${reasonOf(err)}`);
       return { changed: false, error: err };
     }
+  }
+
+  /** Whether the known module with this id still answers at its own (other) address. */
+  async stillAtItsAddress(id, address) {
+    const existing = this.data.devices[id];
+    if (!existing?.address || existing.address === address) {
+      return false;
+    }
+    try {
+      const device = await this.client.info(existing.address, { auth: this.authFor(existing) });
+      return parseIdentity(device).id === id;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The credentials of a module: none for one only found by an announcement, until typed. */
+  authFor(record) {
+    return record.untrusted && !this.config.addresses.includes(record.address)
+      ? undefined
+      : this.config.auth;
   }
 
   needsVerify(record) {
@@ -424,7 +466,7 @@ export class BleBoxApp {
    */
   async verify(record, { timeout } = {}) {
     const address = record.address;
-    const auth = this.config.auth;
+    const auth = this.authFor(record);
     const identity = parseIdentity(await this.client.info(address, { auth, timeout }));
     if (identity.id === record.id) {
       this.verified.set(record.id, this.now());
@@ -509,7 +551,7 @@ export class BleBoxApp {
       return false;
     }
     let config = configOf(record.type, record.apiLevel);
-    const auth = this.config.auth;
+    const auth = this.authFor(record);
     let changed = false;
     try {
       if (this.needsVerify(record)) {
@@ -812,7 +854,12 @@ export class BleBoxApp {
   async doDiscover({ user }) {
     const { services, failed } = await this.browse();
     const typed = new Set(this.config.addresses);
-    const known = new Set(this.records.map((r) => r.address).filter(Boolean));
+    const known = new Set(
+      this.records
+        .filter((r) => !r.untrusted)
+        .map((r) => r.address)
+        .filter(Boolean),
+    );
     const addresses = new Set(typed);
     for (const service of services.slice(0, LIMITS.devices)) {
       const ip = (service?.addresses ?? []).find((a) => isLanUnicast(a));
@@ -892,14 +939,19 @@ export class BleBoxApp {
     const action = { deviceId: record.id, ...this.actionOf(record, entry, value) };
     this.checkOption(action);
     const ticket = { action, cancelled: false, sent: false };
-    if (action.protective) {
-      // Never behind the queue, and an opening or a heating command still
-      // waiting to leave is cancelled.
+    if (action.protective || action.cancelsOpening) {
+      // An opening or a heating command still waiting to leave is cancelled
+      // on arrival, before any queue: every gate close or stop does it (a
+      // step-by-step close waits in the queue itself, but never behind an
+      // opening). Cancelling never sends anything.
       for (const pending of this.tickets.get(record.id) ?? []) {
         if (!pending.sent) {
           pending.cancelled = true;
         }
       }
+    }
+    if (action.protective) {
+      // Never behind the queue.
       return this.run(record, action, received, ticket);
     }
     if (action.sensitive) {
@@ -1039,6 +1091,7 @@ export class BleBoxApp {
         name: 'gate close',
         fresh: true,
         pulse: true,
+        cancelsOpening: true,
         // A close that can never open: always allowed, first in line. A
         // step-by-step pulse can: the opening permission, in the queue.
         ...(separate ? { protective: true } : { sensitive: true, option: 'gatePulse' }),
@@ -1066,6 +1119,7 @@ export class BleBoxApp {
         name: 'gate stop',
         fresh: true,
         protective: true,
+        cancelsOpening: true,
         plan: (r) => {
           if (modeOf(r) === GATE_MODE.OPEN_CLOSE || r.extra !== GATE_EXTRA.STOP) {
             throw this.refusal(ERRORS.gateNoStop);
@@ -1080,7 +1134,10 @@ export class BleBoxApp {
         fresh: true,
         sensitive: true,
         option: 'gate',
+        // The same one-at-a-time and guard as the gate it serves.
+        pulse: true,
         plan: (r) => {
+          guarded(r);
           // No mode before API 20230102: never wired as open/close then.
           if (
             r.mode === GATE_MODE.OPEN_CLOSE ||
@@ -1113,7 +1170,7 @@ export class BleBoxApp {
       this.gateGuards.delete(record.id);
       return;
     }
-    throw this.refusal(ERRORS.gateJustCommanded);
+    throw this.refusal(justCommanded(reading));
   }
 
   thermoAction(key, number) {
@@ -1210,7 +1267,7 @@ export class BleBoxApp {
   async runCommand(record, action, received, ticket) {
     const sendBy = received + TIMINGS.commandSendBy;
     const answerBy = received + TIMINGS.commandAnswerBy;
-    const auth = this.config.auth;
+    const auth = this.authFor(record);
     const check = () => {
       if (ticket.cancelled) throw this.refusal(ERRORS.cancelled);
       this.checkOption(action);
@@ -1266,7 +1323,7 @@ export class BleBoxApp {
       // One gate movement at a time: a second one would stop or reverse it.
       const flying = this.gateFlight.get(record.id);
       if (flying && flying !== ticket) {
-        throw this.refusal(ERRORS.gateJustCommanded);
+        throw this.refusal(justCommanded(reading));
       }
       this.gateFlight.set(record.id, ticket);
     }

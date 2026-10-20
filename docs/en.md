@@ -51,7 +51,9 @@ asks you to type its address.
   opening the gate" is on.
   - Recent gateBox (API 20210118 or later): opening and closing use its
     `/s/o` and `/s/c` commands, the module decides on its limit switches
-    (and refuses when it cannot tell). Closing is always allowed.
+    (and refuses when it cannot tell). Closing is always allowed. These
+    commands depend on the limit switches: check in the wBox app that the
+    open/closed state the gateBox shows is right before relying on them.
   - Opening and closing on separate outputs: closing is always allowed.
   - Step-by-step mode on an older gateBox: closing and opening are **the
     same pulse** (open, stop, close, stop). So closing also needs "Allow
@@ -62,7 +64,9 @@ asks you to type its address.
     gate is seen elsewhere than where it was (or a few seconds later); use
     "Stop the gate". Recent gateBox modules do not tell whether the gate
     moves, only whether it is at a limit switch.
-  - Closing and stopping cancel an opening that has not left yet.
+  - Closing and stopping cancel, as soon as they arrive, an opening (or a
+    walk-in output) that has not left yet; cancelling never sends anything.
+    The walk-in output follows the same one-pulse-at-a-time rule.
 - **Heating (thermoBox)**: switching off is always sent, without a state
   read (it only depends on the identity of the module). Switching on and the
   setpoint are refused until "Allow the heating commands" is on, and the

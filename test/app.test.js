@@ -292,6 +292,65 @@ test('gate: a close cancels an opening still waiting to leave', async (t) => {
   );
 });
 
+test('I6: on an older step-by-step gate, a close cancels a waiting opening, no pulse', async (t) => {
+  const { gladys, net } = await setup(t, { config: { addresses: OLD, allow_gate_open: true } });
+  net.table[OLD].gate.currentPos = 0;
+  const release = net.hold(OLD, '/state/extended');
+  const opening = press(gladys, IDS.oldGate, 'open');
+  await tick();
+  const closing = press(gladys, IDS.oldGate, 'close');
+  await tick();
+  release();
+  const opened = await opening;
+  assert.equal(opened.success, false);
+  assert.match(opened.error, /Annulée/);
+  const closed = await closing;
+  assert.equal(closed.success, true, 'already closed: nothing to send');
+  assert.deepEqual(net.commands(), [], 'never /s/p');
+});
+
+test('m2, m3: the walk-in output shares the guard; no stop advised without a stop output', async (t) => {
+  const net = fakeNetwork();
+  net.table[OLD].gate.extraButtonType = 2;
+  const { gladys } = await setup(t, { net, config: { addresses: OLD, allow_gate_open: true } });
+  assert.equal((await press(gladys, IDS.oldGate, 'close')).success, true);
+  const walkIn = await press(gladys, IDS.oldGate, 'second-output');
+  assert.equal(walkIn.success, false);
+  assert.match(walkIn.error, /télécommande du portail/);
+  assert.doesNotMatch(walkIn.error, /Arrêter le portail/);
+  assert.deepEqual(
+    net.commands().map((c) => c.path),
+    ['/s/p'],
+  );
+});
+
+test('m1: an announced host using the id of a known module never gets it, nor the credentials', async (t) => {
+  const net = fakeNetwork();
+  // 192.168.1.47 announces the id of the gate, which still answers at .41.
+  net.table['192.168.1.47'] = net.table['192.168.1.41'];
+  const { gladys, app } = await setup(t, {
+    net,
+    config: { addresses: '192.168.1.41', username: 'admin', password: 'pw-secret' },
+    scanResults: {
+      mdns: [{ name: 'x', host: 'x.local', addresses: ['192.168.1.47'], port: 80, txt: [] }],
+    },
+  });
+  await gladys.fake.action('find_devices');
+  assert.equal(app.data.devices[IDS.gate].address, '192.168.1.41');
+  assert.equal(app.data.devices[IDS.gate].untrusted, undefined);
+  const to47 = net.calls.filter((c) => c.address === '192.168.1.47');
+  assert.ok(to47.length > 0 && to47.every((c) => c.headers.authorization === undefined));
+});
+
+test('m1: a module moved by an announcement gets no credentials until its address is typed', async (t) => {
+  const { app } = await setup(t, { config: { username: 'admin', password: 'pw-secret' } });
+  const record = app.data.devices[IDS.gate];
+  record.untrusted = true;
+  assert.equal(app.authFor(record), app.config.auth, 'its address is typed');
+  record.address = '192.168.1.99';
+  assert.equal(app.authFor(record), undefined);
+});
+
 test('gate: the option switched off during the read refuses the opening (beforeSend)', async (t) => {
   const { gladys, app, net } = await setup(t, { config: { allow_gate_open: true } });
   const release = net.hold('192.168.1.41', '/s/o');

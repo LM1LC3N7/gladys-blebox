@@ -44,7 +44,12 @@ the notes of the version's GitHub Release.
   everything.
 - The search: only LAN unicast addresses taken from mDNS, no credentials to
   a module only announced on the network, one scan per 10 s, and a lost
-  module searched again every 5 minutes.
+  module searched again every 5 minutes. An announcement never moves a known
+  module that still answers at its address, and a module moved by an
+  announcement gets no credentials until its address is typed.
+- Every gate close or stop cancels, on arrival, an opening or a walk-in
+  command not sent yet (step-by-step closes included); the walk-in output
+  shares the one-pulse-at-a-time rule and the guard of the gate.
 - tempSensor, airSensor (PM2.5, PM10) and multiSensor (temperature,
   humidity, light level, wind, rain, flood, CO2, power, voltage, current).
 - Commands decided on a state read just now, sent within 3.5 s or refused

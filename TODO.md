@@ -138,6 +138,14 @@ up to date at the end of every milestone.
   already known addresses (an announced protected module is named in the
   status, to be typed); one scan per 10 s (the last results reused); a lost
   module (unreachable or address taken) searched again every 5 minutes.
+- Approval round 1 (I6, m1-m4): every gate close and stop cancels, on
+  arrival and before any queue, the opening and walk-in tickets not sent
+  yet (cancelling sends nothing); the walk-in output is a pulse too (one at
+  a time, guarded); "just commanded" advises Stop only when the gateBox has
+  a stop output; an anonymous (announced) probe never moves a record whose
+  address still answers with that id, and a record moved that way is
+  `untrusted`: no credentials until its address is typed; docs: `/s/c`
+  depends on the limit switches, check the state in the wBox app.
 - /data (review 1, M3): block keys must be addresses (`__proto__` is not);
   a record is kept only if its type, API level, kind, address and layout
   agree. A firmware update (another `apiLevel` at the same id) moves the

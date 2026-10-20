@@ -34,7 +34,7 @@ Intégration non officielle, sans lien avec BleBox.
 Si l'API locale de vos modules est protégée dans l'application wBox,
 saisissez l'identifiant et le mot de passe. Le mot de passe est gardé par
 Gladys dans sa base, jamais réaffiché, envoyé seulement à vos modules : les
-adresses saisies et les modules déjà ajoutés (en clair sur votre réseau
+adresses saisies et les modules ajoutés par une adresse saisie (en clair sur votre réseau
 local : les modules n'ont pas de https). Un module protégé qui n'est que
 trouvé par la recherche ne reçoit pas les identifiants : le statut vous
 demande de saisir son adresse.
@@ -53,7 +53,9 @@ demande de saisir son adresse.
   pas activé.
   - gateBox récent (API 20210118 ou plus) : ouvrir et fermer passent par ses
     commandes `/s/o` et `/s/c`, le module décide sur ses fins de course (et
-    refuse quand il ne sait pas). Fermer est toujours permis.
+    refuse quand il ne sait pas). Fermer est toujours permis. Ces commandes
+    dépendent des fins de course : vérifiez dans l'application wBox que l'état
+    ouvert/fermé affiché par le gateBox est juste avant de vous y fier.
   - Ouverture et fermeture sur des sorties séparées : fermer est toujours
     permis.
   - Mode pas à pas sur un gateBox plus ancien : fermer et ouvrir sont **la
@@ -66,7 +68,9 @@ demande de saisir son adresse.
     tant que le portail n'est pas vu ailleurs que là où il était (ou quelques
     secondes après) ; utilisez « Arrêter le portail ». Les gateBox récents ne
     disent pas si le portail bouge, seulement s'il est à une fin de course.
-  - Fermer et arrêter annulent une ouverture qui n'est pas encore partie.
+  - Fermer et arrêter annulent dès leur arrivée une ouverture (ou une sortie
+    portillon) qui n'est pas encore partie ; l'annulation n'envoie jamais rien.
+    La sortie portillon suit la même règle « une impulsion à la fois ».
 - **Chauffage (thermoBox)** : l'extinction est toujours envoyée, sans
   relecture (elle ne dépend que de l'identité du module). L'allumage et la
   consigne sont refusés tant que « Autoriser les commandes de chauffage »
