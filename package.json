@@ -1,6 +1,6 @@
 {
   "name": "gladys-blebox",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Gladys Assistant external integration for BleBox Wi-Fi modules (switchBox, shutterBox, gateBox, thermoBox, wLightBox, sensors), over their local HTTP API. Unofficial, not affiliated with BleBox.",
   "type": "module",

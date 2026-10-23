@@ -6,8 +6,8 @@
     "en": "BleBox Wi-Fi modules, locally: lights, relays, shutters, gate, heating, sensors.",
     "fr": "Modules Wi-Fi BleBox, en local : lumières, relais, volets, portail, chauffage, capteurs."
   },
-  "version": "0.1.1",
-  "docker_image": "ghcr.io/lm1lc3n7/gladys-blebox:0.1.1",
+  "version": "0.1.2",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-blebox:0.1.2",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-blebox/main/cover.png",
   "categories": ["lighting", "climate", "security"],
