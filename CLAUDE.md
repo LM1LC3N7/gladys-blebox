@@ -8,7 +8,8 @@ contributors.
 A Gladys Assistant **external integration** for BleBox Wi-Fi modules (local
 HTTP API, no cloud): a Node.js service (Node 22+, ESM, no build step) that runs
 in its own sandboxed Docker container and talks to Gladys through
-[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
+[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js)
+(v0.16),
 its only runtime dependency. It started from the official JavaScript template
 and ports blebox-uniapi (Apache-2.0). See `TODO.md` for the status and the
 decisions.
@@ -17,7 +18,7 @@ decisions.
 
 ```bash
 npm install
-npm test                                  # node --test, the built-in runner
+npm test                                  # node --test --test-timeout=60000
 node --test test/app.test.js              # one file
 node --test --test-name-pattern "gate"    # tests whose name matches
 npm run cover                             # regenerate cover.png (800×534)
@@ -56,6 +57,11 @@ test/                             node --test, against the SDK's fake Gladys and
 
 ## Rules
 
+- **Features follow the core model.** Every feature has a numeric `min` and
+  `max` (0/0 for text), `read_only` and `has_feedback`: Gladys answers HTTP 422
+  otherwise, and the SDK's fake Gladys does not check it
+  (`test/helpers/coreFeature.js` does). Devices carry `should_poll: false`
+  (Gladys 5.3 polls a device with `poll_frequency` unless it says so).
 - **External ids are forever.** `gladys.externalIds('blebox', id)`, `id`
   being the device id BleBox gives, never a label nor an address. Feature
   keys, manifest keys and action keys are frozen too. A created device never

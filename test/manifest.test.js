@@ -7,7 +7,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { ACTIONS, MDNS_SERVICE, POLL_INTERVAL, THERMO_LIMITS } from '../src/constants.js';
+import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
+import {
+  ACTIONS,
+  GATE_EXTRA,
+  GATE_MODE,
+  MDNS_SERVICE,
+  POLL_INTERVAL,
+  THERMO_LIMITS,
+} from '../src/constants.js';
+import { COLOR_MODE } from '../src/blebox/light.js';
+import { buildDevice } from '../src/model.js';
+import { assertCoreDevice } from './helpers/coreFeature.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const manifest = JSON.parse(read('gladys-assistant-integration.json'));
@@ -109,4 +120,45 @@ test('the actions are the ones the code handles', () => {
   assert.equal(manifest.scene_triggers, undefined);
   assert.equal(manifest.scene_actions, undefined);
   assert.equal(manifest.widgets, undefined);
+});
+
+test('every feature of every device kind has a numeric min and max and the other core fields', () => {
+  const gladys = createFakeGladys({ selector: 'blebox' });
+  const relays = [
+    { index: 0, name: 'Pump' },
+    { index: 1, name: '' },
+  ];
+  const multi = ['temperature', 'humidity', 'illuminance', 'wind', 'co2', 'activePower']
+    .concat(['voltage', 'current', 'rain', 'flood'])
+    .map((type, id) => ({ type, id, name: id % 2 ? '' : `S${id}` }));
+  const layouts = [
+    ['switch', { relays, power: true, voltage: true }],
+    ['shutter', { controlType: 1 }],
+    ['shutter', { controlType: 8 }],
+    ['gate', { mode: GATE_MODE.STEP_BY_STEP, extra: GATE_EXTRA.STOP, secondOutput: true }],
+    ['gate', { mode: GATE_MODE.ONLY_OPEN }],
+    ['thermo', { main: 1, probes: [0, 2] }],
+    ['tempSensor', {}],
+    ['air', { pm25: true, pm10: true }],
+    ['multi', { sensors: multi }],
+    ['dimmer', { channels: 1 }],
+    ...Object.values(COLOR_MODE).map((mode) => ['light', { mode, channels: 5 }]),
+    ['light', { channels: 3 }],
+  ];
+  let features = 0;
+  for (const [kind, layout] of layouts) {
+    const record = { id: 'aabbccddeeff', type: kind, kind, layout, address: '192.168.1.40' };
+    for (const safeRelays of [new Set(), new Set(['aabbccddeeff:0'])]) {
+      for (const language of ['en', 'fr']) {
+        const device = buildDevice(gladys, record, { safeRelays, language });
+        features += assertCoreDevice(device, `${kind} ${JSON.stringify(layout)}`);
+      }
+    }
+  }
+  // switch 4, shutters 2 + 2, gates 6 + 3, thermo 7, tempSensor 1, air 2, multi 10,
+  // dimmer 2, lights: RGBW 3, RGB 3, MONO 10, RGBORW 3, CT 2, CTX2 4, RGBWW 3, 3 channels 3.
+  assert.equal(
+    features,
+    4 * (4 + 2 + 2 + 6 + 3 + 7 + 1 + 2 + 10 + 2 + 3 + 3 + 10 + 3 + 2 + 4 + 3 + 3),
+  );
 });
